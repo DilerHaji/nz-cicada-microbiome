@@ -1,0 +1,82 @@
+#!/bin/bash
+#SBATCH --job-name=imq
+#SBATCH -N 1
+#SBATCH -n 1
+#SBATCH -c 16
+#SBATCH --partition=general
+#SBATCH --qos=general
+#SBATCH --mail-type=END
+#SBATCH --mem=100G
+#SBATCH --mail-user=diler.haji@uconn.edu
+#SBATCH -o dada_%j.out
+#SBATCH -e dada_%j.err
+
+cd /home/CAM/dhaji/projp
+
+module load qiime/2-2018.8
+source activate qiime2-2018.8
+
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path duncan_manifest \
+  --source-format PairedEndFastqManifestPhred33 \
+  --output-path duncan.qza
+
+qiime demux summarize \
+  --i-data duncan.qza \
+  --o-visualization duncan.qzv
+
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs duncan.qza \
+  --p-trunc-len-f 200 \
+  --p-trunc-len-r 200 \
+  --p-n-reads-learn 2000000 \
+  --o-table duncan-dada-table.qza \
+  --o-representative-sequences duncan-dada-rep-seqs.qza \
+  --o-denoising-stats duncan-dada-denoising-stats.qza
+
+qiime feature-table summarize \
+  --i-table duncan-dada-table.qza \
+  --o-visualization duncan-dada-table.qzv \
+  --m-sample-metadata-file Duncan_metadata.txt
+
+qiime feature-table tabulate-seqs \
+  --i-data duncan-dada-rep-seqs.qza \
+  --o-visualization duncan-dada-rep-seqs.qzv
+  
+qiime metadata tabulate \
+  --m-input-file duncan-dada-denoising-stats.qza \
+  --o-visualization duncan-dada-denoising-stats.qzv
+
+qiime feature-classifier classify-sklearn \
+  --i-classifier silva-132-99-515-806-nb-classifier2.qza \
+  --i-reads duncan-dada-rep-seqs.qza \
+  --o-classification miroid-dada-rep-seqs-taxonomy.qza
+
+qiime metadata tabulate \
+  --m-input-file miroid-dada-rep-seqs-taxonomy.qza \
+  --o-visualization miroid-dada-rep-seqs-taxonomy.qzv
+  
+qiime alignment mafft \
+	--i-sequences miroid-dada-rep-seqs.qza \
+	--p-n-threads 0 \
+	--o-alignment miroid-dada-rep-seqs-aligned.qza
+
+qiime alignment mask \
+	--i-alignment miroid-dada-rep-seqs-aligned.qza \
+	--p-max-gap-frequency 1.0 \
+	--p-min-conservation 0.2 \
+	--o-masked-alignment miroid-dada-rep-seqs-aligned-filtered.qza
+	
+qiime phylogeny raxml-rapid-bootstrap \
+	--i-alignment miroid-dada-rep-seqs-aligned-filtered.qza \
+	--p-seed 1234 \
+	--p-rapid-bootstrap-seed 12345 \
+	--p-bootstrap-replicates 100 \
+	--p-n-threads 32 \
+	--p-raxml-version SSE3 \
+	--o-tree miroid-dada-unrooted-tree.qza	
+
+qiime phylogeny midpoint-root \
+	--i-tree miroid-unrooted-tree.qza \
+	--o-rooted-tree miroid-rooted-tree.qza

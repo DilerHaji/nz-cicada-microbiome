@@ -1,0 +1,1024 @@
+phylo <- qza_to_phyloseq(features="nzbiome-dada-table.qza", tree="nzbiome-dada-filtered-alignment-rooted-tree.qza", taxonomy="nzbiome-dada-rep-seqs-taxonomy.qza", metadata="projP-final-metadata.tsv")
+
+phylo <- subset_samples(phylo, !is.na(type) 
+	& !type %in% c("uncertain", "Unknown9","bacteriome")
+	& !ID %in% c("C1", "C2", "T3", "T5", "T7", "T23")
+	)
+
+phylo <- subset_taxa(phylo, taxa_sums(phylo) > 0)
+
+meta <- sample_data(phylo)
+
+
+
+
+################## Filtering ##############
+
+phylo	#6871
+
+#### DECONTAM 
+library(decontam)
+
+## Plot of library sizes showing that controls have lower library sizes, with many of the gut samples with similar library sizes as controls. Eggs have larger library sizes and do not overlap the controls, but are also dominated by sulcia, which we know must be vertically transmitted very generation. The relative abundance of Sulcia in the eggs was near 100% for all egg samples, suggesting that the amount of bacteria in the eggs is negligible to non-existent compared to the amount of Sulcia. Given that the gut sample library sizes overlap library sizes of the controls, it is unclear to what extent the gut bacterial diversity we uncovered reflects the true diversity and abundances of bacterria in the gut or the influence of contaminant bacteria. In other words, the most abundant bacteria in gut samples may be contamninant and differences in library sizes are driven by variable bacterial biomass in cicada guts.   
+
+phy <- subset_samples(phylo, batch %in% "B4")
+df <- as.data.frame(sample_data(phy)) 
+df$LibrarySize <- sample_sums(phy)
+df <- df[order(df$LibrarySize),]
+df$Index <- seq(nrow(df))
+ggplot(data=df, aes(x=Index, y=LibrarySize, color=type)) + geom_point()
+
+
+## Prev based for B4
+## We performed a series of Decontam (R package) filtering steps. First, we used Decontam's prevalence based filtering to remove bacterial taxa that were prevalent across controls (threshold = 0.6) 
+## Based on the plot, increase prevelence of bacteria acroos gut samples showed a qualitative increase with prevalence across control samples, suggesting that contaminants ar widespread in gut samples. 
+ 
+
+phy <- subset_samples(phylo, batch %in% c("B4"))
+phy <- subset_taxa(phy, taxa_sums(phy) > 0)
+
+sample_data(phy)$is.neg <- sample_data(phy)$type == "control"
+b4_prev <- isContaminant(phy, method="prevalence", neg="is.neg", threshold=0.6)
+table(b4_prev$contaminant)
+ps.pa <- transform_sample_counts(phy, function(abund) 1*(abund>0))
+ps.pa.neg <- prune_samples(sample_data(ps.pa)$type == "control", ps.pa)
+ps.pa.pos <- prune_samples(sample_data(ps.pa)$type == "gut", ps.pa)
+df.pa <- data.frame(pa.pos=taxa_sums(ps.pa.pos), pa.neg=taxa_sums(ps.pa.neg), contaminant=b4_prev$contaminant)
+ggplot(data=df.pa, aes(x=pa.neg, y=pa.pos, color=contaminant)) + geom_jitter(alpha = 0.5) +
+  xlab("Prevalence (Negative Controls)") + ylab("Prevalence (True Samples)")
+
+n <- rownames(df.pa[df.pa$pa.pos > 40,])
+
+tax_table(prune_taxa(taxa = n , phylo))
+
+
+decontam1 <- rownames(b4_prev[which(b4_prev$contaminant),])
+
+phy1 <- prune_taxa(!taxa_names(phylo) %in% decontam1, phylo) #-30
+
+
+
+
+## Freq-based decontam for B1-B2
+
+
+phy <- subset_samples(phy1, batch %in% c("B1","B2"))
+phy <- subset_samples(phy, conc > 0)
+phy <- subset_taxa(phy, taxa_sums(phy) > 0)
+b1b2_freq <- isContaminant(phy, method="frequency", conc="conc", threshold = 0.35)
+table(b1b2_freq$contaminant)
+hist(b1b2_freq$p, breaks = 100)
+head(which(b1b2_freq$contaminant))
+plot_frequency(phy, taxa_names(phy)[c(which(b1b2_freq$contaminant))], conc="conc")
+
+decontam2 <- rownames(b1b2_freq[which(b1b2_freq$contaminant),])
+phy1 <- prune_taxa(!taxa_names(phy1) %in% decontam2, phy1) #-66
+
+
+
+
+## Freq-based decontam for B3
+
+
+phy <- subset_samples(phy1, batch %in% c("B3"))
+phy <- subset_samples(phy, conc > 0)
+phy <- subset_taxa(phy, taxa_sums(phy) > 0)
+b1b2_freq <- isContaminant(phy, method="frequency", conc="conc", threshold = 0.3)
+table(b1b2_freq$contaminant)
+hist(b1b2_freq$p, breaks = 200)
+head(which(b1b2_freq$contaminant))
+plot_frequency(phy, taxa_names(phy)[c(which(b1b2_freq$contaminant))], conc="conc")
+
+decontam3 <- rownames(b1b2_freq[which(b1b2_freq$contaminant),])
+phy1 <- prune_taxa(!taxa_names(phy1) %in% decontam3, phy1) #-72
+
+
+
+
+## Freq-based decontam for B4
+
+phy <- subset_samples(phy1, batch %in% c("B4"))
+phy <- subset_samples(phy, !type %in% "control")
+phy <- subset_samples(phy, conc > 0)
+phy <- subset_taxa(phy, taxa_sums(phy) > 0)
+b1b2_freq <- isContaminant(phy, method="frequency", conc="conc", threshold = 0.3)
+table(b1b2_freq$contaminant)
+hist(b1b2_freq$p, breaks = 100)
+head(which(b1b2_freq$contaminant))
+plot_frequency(phy, taxa_names(phy)[c(which(b1b2_freq$contaminant))], conc="conc")
+
+decontam4 <- rownames(b1b2_freq[which(b1b2_freq$contaminant),])
+phy1 <- prune_taxa(!taxa_names(phy1) %in% decontam4, phy1) #-25
+
+
+
+
+## Next, we used the frequency based approach in Decontam with concentration data separately for samples in B2 (Decontam threshold 0.35), B3 (Decontam threshold 0.3), and B4(Decontam threshold 0.3). We removed putative contaminants found in each of the three iterations from the full dataset. 
+
+
+
+
+
+
+
+####### MORE FILTERING 
+
+phy1_backup1 <- phy1 #6678
+
+phy1 <- tip_glom(phy1, h = 0.03)
+phy1_topglom_backup <- phy1	#
+save.image("start.RData")
+phy1 <- subset_taxa(phy1, !Genus %in% c("D_5__Candidatus Sulcia"))	#
+phy1 <- subset_taxa(phy1, !Kingdom %in% c("D_0__Eukaryota"))	#
+phy1 <- subset_taxa(phy1, !Kingdom %in% c("D_0__Archaea"))	#
+phy1 <- subset_taxa(phy1, !Family %in% c("D_4__Mitochondria"))	#
+phy1 <- subset_taxa(phy1, !Order %in% c("D_3__Chloroplast"))	#
+phy1 <- subset_taxa(phy1, !Genus %in% c("D_5__Candidatus Hodgkinia"))	#
+phy1 <- subset_taxa(phy1, !is.na(Kingdom))	#
+phy1 <- subset_taxa(phy1, !Kingdom %in% "Unassigned")	#
+phy1 <- subset_taxa(phy1, taxa_sums(phy1) > 0)	
+phy1 <- subset_samples(phy1, sample_sums(phy1) > 0) #2324
+
+
+
+## Using our ASV tree, we agglomerated ASVs to a tree height of 0.03 using clustered cophenetic distances (tip_glom function in phyloseq) to reduce noise from sequencing artifacts. We then removed all resulting ASVs that with classifications 
+
+
+
+#### Subsetting just gut samples 
+ 
+phy1 <- subset_samples(phy1, type %in% c("gut", "control"))
+phy1 <- subset_taxa(phy1, taxa_sums(phy1) > 0)	#2269
+
+
+#### Filtering by relative abundance < 5% for B4 and < 1% for b1-b3
+
+p <- subset_samples(phy1, batch %in% "B4")
+p <- subset_taxa(p, taxa_sums(p) > 0)
+#p <- tax_glom(p, taxrank = "Genus")
+p <- subset_samples(p, sample_sums(p) > 0)
+p <- transform_sample_counts(p, function(x){ x/sum(x) })
+potu <- data.frame(otu_table(p))
+pmean <- apply(potu, 1, function(x){max(x[x>0]) })
+hist(pmean[pmean > 0.05], breaks = 100)
+b4low <- names(pmean[pmean > 0.01])
+
+p <- subset_samples(phy1, batch %in% "B3")
+p <- subset_taxa(p, taxa_sums(p) > 0)
+#p <- tax_glom(p, taxrank = "Genus")
+p <- subset_samples(p, sample_sums(p) > 0)
+p <- transform_sample_counts(p, function(x){ x/sum(x) })
+potu <- data.frame(otu_table(p))
+pmean <- apply(potu, 1, function(x){max(x[x>0]) })
+b3low <- names(pmean[pmean > 0.01])
+
+
+
+p <- subset_taxa(phy1, taxa_sums(p) > 0)
+#p <- tax_glom(p, taxrank = "Genus")
+p <- subset_samples(p, sample_sums(p) > 0)
+p <- transform_sample_counts(p, function(x){ x/sum(x) })
+potu <- data.frame(otu_table(p))
+pmean <- apply(potu, 1, function(x){max(x[x>0]) })
+hist(log(pmean), breaks = 100)
+blow <- names(pmean[log(pmean) < -10])
+
+
+phy1t <- prune_taxa(!taxa_names(phy1) %in% blow, phy1)
+
+
+
+
+### Anything unique to B3 and not in B4
+
+p <- subset_samples(phy1, batch %in% "B3")
+
+p2 <- subset_samples(phy1, batch %in% "B4")
+
+b3unique <- taxa_names(phy1)[taxa_sums(p) > 0 & taxa_sums(p2) == 0]
+
+phy1t <- prune_taxa(!taxa_names(phy1t) %in% b3unique, phy1t) #1906
+
+
+
+
+### Any genus > relative abundance in controls vs
+
+phy <- tax_glom(phylo, taxrank = "Genus")
+phy2 <- merge_samples(phy, "type")
+phy2 <- transform_sample_counts(phy2, function(x){ x/sum(x) })
+
+otu <- otu_table(phy2)
+head(otu)
+
+rm <- colnames(otu[ , otu["gut", ] < otu["control",]])
+rm2 <- data.frame(tax_table(prune_taxa(taxa = rm, phy))[,6])$Genus
+
+tax <- data.frame(tax_table(phy1t))
+rm3 <- rownames(tax[tax$Genus %in% rm2, ]) #removing 325
+
+phy1t <- prune_taxa(!taxa_names(phy1t) %in% rm3, phy1t) #1581
+
+
+
+
+
+
+
+
+
+
+
+
+### controls again 
+
+pc <- prune_taxa(taxa = taxa_names(phy1t), phylo)
+pc <- subset_samples(pc, type %in% c("gut","control"))
+pc <- subset_samples(pc, sample_sums(pc) > 0)
+
+
+pc <- data.frame(otu_table(phy1), check.names = FALSE, check.rows = FALSE, stringsAsFactors = FALSE)
+sample_data(phy1)$type == "control"
+pc[rownames(pc) %in% taxa_names(phy1t), sample_data(phy1)$type == "control"] <- 0
+pc[!rownames(pc) %in% taxa_names(phy1t), sample_data(phy1)$type == "gut"] <- 0
+
+
+pc2 <- phyloseq(otu_table(pc, taxa_are_rows = TRUE), phy_tree(phy1), sample_data(phy1), tax_table(phy1))
+pc2 <- subset_samples(pc2, sample_sums(pc2) > 0)
+
+
+
+pc2 <- prune_taxa(taxa_names(phy1t), phy1)
+pc2 <- subset_samples(pc2, sample_sums(pc2) > 0)
+
+
+
+ord <- ordinate(pc2, method = "PCoA", distance = "unifrac")
+ordDF <- data.frame(PC1 = ord$vectors[,1], PC2 = ord$vectors[,2], type = sample_data(pc2)$type)
+ggplot(ordDF, aes(x = PC1, y = PC2, color = type)) + 
+	geom_point(alpha = 0.8, size = 3) +
+	xlab(paste("PC1", paste(round(100 * ord$values$Eigenvalues[1]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+	ylab(paste("PC2", paste(round(100 * ord$values$Eigenvalues[2]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+	scale_color_brewer(palette = "Paired") +
+	#stat_ellipse(type = "t") +
+	theme_bw() +
+	theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+
+sample_to_remove <- names(ord$vector[ord$vector[,1] < -0.25, 1])
+
+
+phy1t <- subset_samples(phy1t, !ID %in% sample_to_remove)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### Abund prev by batch 
+
+otu_b1 <- data.frame(otu_table(  tax_glom(subset_samples(phy1, batch %in% "B1"), taxrank = "Genus") ))
+otu_b2 <- data.frame(otu_table(  tax_glom(subset_samples(phy1, batch %in% "B2"), taxrank = "Genus")   ))
+otu_b3 <- data.frame(otu_table(  tax_glom(subset_samples(phy1, batch %in% "B3"), taxrank = "Genus") ))
+otu_b4 <- data.frame(otu_table(  tax_glom(subset_samples(phy1, batch %in% "B4"), taxrank = "Genus")  ))
+
+a <- base::apply(otu_b1, 1, function(x){ sum(x) })
+b <- base::apply(otu_b2, 1, function(x){  sum(x) })
+c <- base::apply(otu_b3, 1, function(x){  sum(x) })
+d <- base::apply(otu_b4, 1, function(x){   sum(x) })
+
+a2 <- base::apply(otu_b1, 1, function(x){ length(x[x > 0]) })
+b2 <- base::apply(otu_b2, 1, function(x){ length(x[x > 0]) })
+c2 <- base::apply(otu_b3, 1, function(x){ length(x[x > 0]) })
+d2 <- base::apply(otu_b4, 1, function(x){ length(x[x > 0]) })
+
+ref <- tax_glom(subset_samples(phy1, batch %in% "B4"), taxrank = "Genus")
+tax <- tax_table(ref)
+
+adata <- data.frame(abund = as.numeric(a/sum(a)), prev = as.numeric(a2)/dim(otu_b1)[2], batch = rep("B1", length(a)), tax = as.character(tax[,6]), class = as.character(tax[,3]))
+bdata <- data.frame(abund = as.numeric(b/sum(b)), prev = as.numeric(b2)/dim(otu_b1)[2], batch = rep("B2", length(a)), tax = as.character(tax[,6]), class = as.character(tax[,3]) )
+cdata <- data.frame(abund = as.numeric(c/sum(c)), prev = as.numeric(c2)/dim(otu_b1)[2], batch = rep("B3", length(a)), tax = as.character(tax[,6]), class = as.character(tax[,3]) )
+ddata <- data.frame(abund = as.numeric(d/sum(d)), prev = as.numeric(d2)/dim(otu_b1)[2], batch = rep("B4", length(a)), tax = as.character(tax[,6]), class = as.character(tax[,3]) )
+
+adata$tax <- unlist(lapply(str_split(adata$tax, "__"), "[", 2))
+adata$class <- unlist(lapply(str_split(adata$class, "__"), "[", 2))
+
+bdata$tax <- unlist(lapply(str_split(bdata$tax, "__"), "[", 2))
+bdata$class <- unlist(lapply(str_split(bdata$class, "__"), "[", 2))
+
+cdata$tax <- unlist(lapply(str_split(cdata$tax, "__"), "[", 2))
+cdata$class <- unlist(lapply(str_split(cdata$class, "__"), "[", 2))
+
+ddata$tax <- unlist(lapply(str_split(ddata$tax, "__"), "[", 2))
+ddata$class <- unlist(lapply(str_split(ddata$class, "__"), "[", 2))
+
+dd <- data.frame(rbind(adata, bdata, cdata, ddata))
+
+abundprev_plot <- ggplot(dd, aes(x = prev, y = abund)) +
+	geom_text_repel(data = dd[dd$prev > 0.25 | dd$abund > 0.015,], aes(label = tax), size = 2) +
+	geom_point(size = 3) +
+	geom_point(data = dd[dd$prev > 0.25 | dd$abund > 0.015,], aes(x = prev, y = abund, col = class), size = 3) +
+	scale_color_brewer(palette = "Paired") +
+	#facet_wrap(~batch, scale = "free") +
+	theme_bw() +
+	theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+	
+ggsave("abundprev_plot.png", abundprev_plot, scale = 0.7)
+
+#tax[data.frame(tax[,3])[,1] == "D_2__vadinHA49",]
+
+
+
+
+
+## looking by species 
+
+phyg <- tax_glom(phy1t, taxrank = "Order")
+phyb <- subset_samples(phyg, type %in% "gut")
+
+ar2 <- c()
+
+for(j in c("B1", "B2", "B3", "B4")) {
+
+	phy <- subset_samples(phyb, batch %in% j)
+	tax <- tax_table(phy)
+	ar <- list()
+	species <- unique(sample_data(phy)$species.tree)[!is.na(unique(sample_data(phy)$species.tree))]
+	species <- species[species %in% names(table(sample_data(phy)$species.tree)[table(sample_data(phy)$species.tree) > 2])]
+
+	for(i in species) {
+		id <- i
+		ar[[id]] <- data.frame(otu_table( subset_samples(phy, species.tree %in% i)))
+		a <- base::apply(ar[[id]], 1, function(x){ sum(x) })
+		a2 <- base::apply(ar[[id]], 1, function(x){ length(x[x > 0]) })
+		adata <- data.frame(abund = as.numeric(a/sum(a)), prev = as.numeric(a2)/dim(ar[[id]])[2], batch = rep(j, length(a)), species = rep(i, length(a)), tax = as.character(tax[,4]), class = as.character(tax[,3]))
+		adata$tax <- unlist(lapply(str_split(adata$tax, "__"), "[", 2))
+		adata$class <- unlist(lapply(str_split(adata$class, "__"), "[", 2))
+		ar[[id]] <- adata
+	}
+
+ar2 <- rbind(ar2, do.call("rbind", ar))
+
+}
+
+ar3 <- ar2
+
+
+library(RColorBrewer)
+n <- 12
+qual_col_pals = brewer.pal.info[rownames(brewer.pal.info) == 'Paired',]
+#col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+pie(rep(1,n), col=sample(col_vector, n))
+
+cols <- c("Actinobacteria" = col_vector[1],
+		  "Alphaproteobacteria" = col_vector[2],
+		  "Bacilli" = col_vector[3],
+		  "Babeliae" = col_vector[4],
+		  "Bacteroidia" = col_vector[5],
+		  "Clostridia" = col_vector[6],
+		  "Deltaproteobacteria" = col_vector[7],
+		  "Gammaproteobacteria" = col_vector[8],
+		  "Mollicutes" = col_vector[9],
+		  "Gemmatimonadetes" = col_vector[1],
+		  "Negativicutes" = col_vector[11],
+		  "Oxyphotobacteria" = col_vector[12]
+		  )
+
+
+ar2 <- ar3[ar3$batch == "B3",]
+
+g1 <- ggplot(ar2, aes(x = prev, y = abund, shape = batch)) +
+	geom_text_repel(data = ar2[ar2$prev > 0.45 | ar2$abund > 0.1,], aes(label = species, col = class), size = 2) +
+	#geom_line(data = ar2[ar2$prev > 0.55 | ar2$abund > 0.5,], aes(group = tax, col = class)) +
+	geom_point(size = 3, alpha = 0.5) +
+	geom_point(data = ar2[ar2$prev > 0.45 | ar2$abund > 0.1,], aes(x = prev, y = abund, col = class), size = 3) +
+	scale_color_manual(values = cols) +
+	#facet_wrap(~batch, scale = "free") +
+	theme_bw() +
+	theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+	
+ar2 <- ar3[ar3$batch == "B4",]
+
+g2 <- ggplot(ar2, aes(x = prev, y = abund, shape = batch)) +
+	geom_text_repel(data = ar2[ar2$prev > 0.45 | ar2$abund > 0.1,], aes(label = species, col = class), size = 2) +
+	#geom_line(data = ar2[ar2$prev > 0.55 | ar2$abund > 0.5,], aes(group = tax, col = class)) +
+	geom_point(size = 3, alpha = 0.5) +
+	geom_point(data = ar2[ar2$prev > 0.45 | ar2$abund > 0.1,], aes(x = prev, y = abund, col = class), size = 3) +
+	scale_color_manual(values = cols) +
+	#facet_wrap(~batch, scale = "free") +
+	theme_bw() +
+	theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+abundprev_species <- ggarrange(g1, g2)
+
+ggsave("abundprev_species.png", abundprev_species, scale = 0.8)
+ggsave("abundprev_species_legend.png", g2, scale = 0.8)
+
+
+
+
+
+
+
+
+
+
+
+
+# Ordinations
+
+phy <- tax_glom(phy1t, taxrank = "Genus")
+phy <- subset_samples(phy, type %in% "gut" & genus %in% c("Kikihia", "Maoricicada", "Rhodopsalta"))
+phy <- subset_samples(phy, sample_sums(phy) > 0)
+phy <- subset_samples(phy, batch %in% c("B3", "B4"))
+phy <- subset_samples(phy, sample_sums(phy) > 0)
+
+ord <- ordinate(phy, method = "PCoA", distance = "wunifrac")
+ordDF <- data.frame(PC1 = ord$vectors[,1], PC2 = ord$vectors[,2], species = sample_data(phy)$genus, batch = sample_data(phy)$batch)
+op <- ggplot(ordDF, aes(x = PC1, y = PC2, color = species, shape = batch)) + 
+	geom_point(alpha = 0.8, size = 5) +
+	xlab(paste("PC1", paste(round(100 * ord$values$Eigenvalues[1]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+	ylab(paste("PC2", paste(round(100 * ord$values$Eigenvalues[2]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+	scale_color_brewer(palette = "Paired") +
+	#stat_ellipse(type = "t") +
+	theme_bw() +
+	theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+op4 <- op
+
+ggsave("ord.png", op4, scale = 0.7)
+
+
+hisU3 <- phyloseq::distance(phy, method = "wunifrac")
+
+adonis(hisU3 ~ species + batch, data = data.frame(sample_data(phy)))
+permutest(betadisper(hisU3,  data.frame(sample_data(phy))$batch))
+permutest(betadisper(hisU3,  data.frame(sample_data(phy))$species))
+
+
+
+
+met <- data.frame(sample_data(phy), check.names = FALSE, check.rows = FALSE, stringsAsFactors = FALSE)
+otu <- data.frame(otu_table(phy), check.names = FALSE, check.rows = FALSE, stringsAsFactors = FALSE)
+sp <- unique(met[, colnames(met) == "species.tree"])
+notu <- c()
+nspe <- c()
+for(i in sp[!is.na(sp)]){
+	a <- data.frame(otu[, !is.na(match(met$species.tree, i))])
+	nspe <- c(nspe, dim(a)[2])
+	b <- apply(a, 1, sum)
+	notu <- cbind(notu, b)
+}
+colnames(notu) <- sp[!is.na(sp)]
+nphy <- phyloseq(otu_table(notu, taxa_are_rows = TRUE), tax_table(phy1), phy_tree(phy1))
+
+ord <- ordinate(nphy, method = "PCoA", distance = "wunifrac")
+ordDF <- data.frame(PC1 = ord$vectors[,1], PC2 = ord$vectors[,2], nspe = nspe, sp = rownames(ord$vectors))
+op <- ggplot(ordDF, aes(x = PC1, y = PC2, size = nspe)) + 
+	geom_point(alpha = 0.8) +
+	xlab(paste("PC1", paste(round(100 * ord$values$Eigenvalues[1]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+	ylab(paste("PC2", paste(round(100 * ord$values$Eigenvalues[2]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+	scale_color_brewer(palette = "Paired") +
+	#stat_ellipse(type = "t") +
+	theme_bw() +
+	theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+op4 <- op
+
+
+
+
+nspe_plot <- ggplot(ordDF, aes(x = PC1, y = nspe)) +
+	geom_point(size = 4) +
+	theme_bw() +
+	xlab(paste("PC2", paste(round(100 * ord$values$Eigenvalues[2]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+	theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.x = element_text( hjust = 1)) 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### Host phylogeny by chosen taxa in abund/prev plots
+library(phytools)
+library(ggtree)
+
+htree <- read.tree("raxml.tre")
+
+htree <- reroot(htree, node = 70)
+
+t <- htree
+
+t <- drop.tip(t, c("Amphipsalta_zelandica", "Kosemia_yezoensis", "Cicadettana_calliope", "phaeoptera"))
+t$tip.label <-  unlist( lapply( str_split(t$tip.lab, "_"), "[", 1) )
+
+t <- drop.tip(t, c("phaeoptera", "muta-NI-east", "westlandica-north-coast"))
+
+
+
+
+### Host phylogeny with heatmap (based on abund prev from above)
+
+phyb <- subset_samples(phyg, type %in% "gut")
+phyb <- subset_taxa(phyb, taxa_sums(phyb) > 0)
+phyb <- transform_sample_counts(phyb, function(x){ log(x+1) })
+phyb <- subset_samples(phyb, batch %in% c("B3", "B4"))
+
+table(sample_data(phyb)$species.tree)
+
+
+dd <- c()
+for(i in unique(sample_data(phyb)$species.tree)[!is.na(unique(sample_data(phyb)$species.tree))]) { 
+	a <- subset_samples(phyb, species.tree %in% i)
+	b <- data.frame(otu_table(a))
+	c <- apply(b, 1, function(x){ length(x[x > log(2)])/dim(b)[2] })
+	dd <- cbind(dd, c)
+}
+
+colnames(dd) <- unique(sample_data(phyb)$species.tree)[!is.na(unique(sample_data(phyb)$species.tree))]
+
+gen <- ar2[ar2$abund > 0.01 | ar2$prev > 0.5, "tax"]
+gen <- taxa_names(subset_taxa(phyb, Order %in% paste("D_3__", gen, sep = "")))
+
+dd <- dd[rownames(dd) %in% gen, ]
+dd <- data.frame(t(dd), check.names = FALSE, check.rows = FALSE, stringsAsFactors = FALSE)
+
+#colnames(dd) <- paste(seq(1, dim(dd)[2]), unlist(lapply(str_split(as.character(tax_table(phyb)[rownames(tax_table(phyb)) %in% colnames(dd), 6]), "__"), "[", 2)), sep = "_")
+colnames(dd) <- unlist(lapply(str_split(as.character(tax_table(phyb)[rownames(tax_table(phyb)) %in% colnames(dd), 4]), "__"), "[", 2))
+
+#sorted <- sort(apply(dd, 2, function(x){ length( x[is.finite(x) & !is.na(x)] ) }), decreasing = TRUE)
+sorted <- sort(apply(dd, 2, function(x){ length(x[x > 0] ) }), decreasing = TRUE)
+#sorted2 <- apply(dd, 2, function(x){ mean( x[is.finite(x) & !is.na(x)] ) })
+sorted2 <- apply(dd, 2, function(x){ mean( x[ x > 0 ]) })
+sorted2[!is.finite(sorted2)] <- 0
+sorted2 <- sorted2[match(names(sorted), names(sorted2))]
+
+
+dd <- dd[, match( names(sorted[sorted > 2]), colnames(dd))]
+
+rm3 <- names(apply(dd, 1, function(x){ mean(x[ x > 0 ])} )[apply(dd, 1, function(x){ mean(x[ x > 0 ])} ) == 1])
+rm1 <- names(apply(dd, 1, function(x){ mean(x[is.finite(x) & !is.na(x)]) } )[is.na(apply(dd, 1, function(x){ mean(x[is.finite(x) & !is.na(x)]) } ))])
+rm2 <- t$tip.label[!t$tip.label %in% sample_data(phyb)$species.tree]
+
+t2 <- drop.tip(t, c(rm1, rm2, rm3))
+
+plot(t2)
+nodelabels()
+
+ghtree <- ggtree(t2) + 
+	geom_tiplab(align = TRUE, size = 3) +
+	geom_nodelab( nudge_x = 0.01, nudge_y = 0.001, size = 2.5) + 
+	ylim(0,39) +
+	geom_hilight(node=34, fill="blue", alpha=.1, extendto = 0.31) +
+    geom_hilight(node=55, fill="green", alpha=.1, extendto = 0.31) +
+    geom_hilight(node=56, fill="yellow", alpha=.1, extendto = 0.31)
+
+#install.packages("pheatmap")
+#library(pheatmap)
+
+#heat_b3_logabund <- gheatmap(ghtree, dd, offset = 0.12, width=1.5, colnames=T, low = "white", high = "red", colnames_angle = 45, colnames_offset_x = -0.02, colnames_offset_y = -1, font.size = 2.3)
+#heat_b4_logabund <- gheatmap(ghtree, dd, offset = 0.12, width=1.5, colnames=T, low = "white", high = "red", colnames_angle = 45, colnames_offset_x = -0.02, colnames_offset_y = -1, font.size = 2.3)
+#heat_b3_prev <- gheatmap(ghtree, dd, offset = 0.12, width=1.5, colnames=T, low = "white", high = "red", colnames_angle = 45, colnames_offset_x = -0.02, colnames_offset_y = -1, font.size = 2.3)
+#heat_b4_prev <- gheatmap(ghtree, dd, offset = 0.12, width=1.5, colnames=T, low = "white", high = "red", colnames_angle = 45, colnames_offset_x = -0.02, colnames_offset_y = -1, font.size = 2.3)
+
+heat_all_prev <- gheatmap(ghtree, dd, offset = 0.1, width=1.5, colnames=T, low = "white", high = "red", colnames_angle = 55, colnames_offset_x = 0, colnames_offset_y = 0, font.size = 3, hjust = 0, colnames_position = "top", color = "lightgrey") 
+
+#ggsave("heat_b3_logabund.png", heat_b3_logabund)
+#ggsave("heat_b4_logabund.png", heat_b4_logabund)
+#ggsave("heat_b3_prev.png", heat_b3_prev)
+#ggsave("heat_b4_prev.png", heat_b4_prev)
+
+ggsave("heat_all_prev.png", heat_all_prev, scale = 0.9)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### Modeling 
+
+#install.packages("geosphere")
+library(geosphere)
+#install.packages("Imap")
+library(Imap)
+
+phy <- subset_samples(phy1t, type %in% "gut" & batch %in% c("B3", "B4"))
+phy <- transform_sample_counts(phy, function(x){ log(x+1) })
+
+sam <- sample_data(phy)
+sam2 <- data.frame(id = sam$ID, lat = sam$lat_sign, lon = sam$lon_sign, row.names = rownames(sam))
+
+
+
+## GEODIS
+
+geodis <- GeoDistanceInMetresMatrix(sam2)
+geodis[lower.tri(geodis, diag = TRUE)] <- "diag"
+colnames(geodis) <- rownames(geodis) <- paste(as.character(sam$ID), sam$elevation, sam$habitat, sam$island, sam$batch, sam$species.tree, sep = "_")
+
+gtemp <- data.frame(cbind(geodis, ID = rownames(geodis)), check.rows = FALSE, check.names = FALSE, fix.empty.names = FALSE, stringsAsFactors = FALSE)
+
+geodis2 <- gather(gtemp, key = id, value = geodis, 1:dim(sam)[1])
+
+
+
+## PDIS
+
+pdis_unifrac <- phyloseq::distance(phy, method="wunifrac", type="samples")
+pdis_unifrac <- as.matrix(pdis_unifrac)
+pdis_unifrac[lower.tri(pdis_unifrac, diag = TRUE)] <- "diag"
+colnames(pdis_unifrac) <- rownames(pdis_unifrac) <- paste(as.character(sam$ID), sam$elevation, sam$habitat, sam$island, sam$batch, sam$species.tree, sep = "_")
+
+ptemp <- data.frame(cbind(pdis_unifrac, ID = rownames(pdis_unifrac)), check.rows = FALSE, check.names = FALSE, fix.empty.names = FALSE, stringsAsFactors = FALSE)
+
+pdis2 <- gather(ptemp, key = id, value = pdis, 1:dim(sam)[1])
+head(pdis2)
+
+
+dis <- data.frame(pdis2, geodis = geodis2$geodis)
+
+dis$elev_diff <- abs(as.numeric(unlist(lapply(str_split(dis$ID, "_"), "[", 2))) - as.numeric(unlist(lapply(str_split(dis$id, "_"), "[", 2))))
+dis$habitat_diff <- ifelse(unlist(lapply(str_split(dis$ID, "_"), "[", 3)) == unlist(lapply(str_split(dis$id, "_"), "[", 3)), yes = 0, no = 1)
+dis$island_diff <- ifelse(unlist(lapply(str_split(dis$ID, "_"), "[", 4)) == unlist(lapply(str_split(dis$id, "_"), "[", 4)), yes = 0, no = 1)
+dis$batch_diff <- ifelse(unlist(lapply(str_split(dis$ID, "_"), "[", 5)) == unlist(lapply(str_split(dis$id, "_"), "[", 5)), yes = 0, no = 1)
+dis$speciesID <- unlist(lapply(str_split(dis$ID, "_"), "[", 6))
+dis$speciesid <- unlist(lapply(str_split(dis$id, "_"), "[", 6))
+
+
+
+## COPH
+
+coph <- cophenetic(t)
+coph[lower.tri(coph, diag = TRUE)] <- "diag"
+coph <- data.frame(coph, speciesID = rownames(coph), check.rows = FALSE, check.names = FALSE, fix.empty.names = FALSE, stringsAsFactors = FALSE)
+coph <- gather(coph, key = speciesid, value = coph, 1:(dim(coph)[2]-1))
+
+copho_vec <- c()
+for(i in 1:dim(dis)[1]){
+	a <- coph[coph$speciesID == dis[i, "speciesID"] & coph$speciesid == dis[i, "speciesid"],]
+	if(dim(a)[1] > 0) {
+		copho_vec <- c(copho_vec, a$coph)
+	} else (
+		copho_vec <- c(copho_vec, "NA")
+	)
+}
+
+dis$copho <- as.numeric(copho_vec)
+
+
+
+
+
+dis <- dis[!dis$pdis %in% "diag" & !dis$geodis %in% "diag",]
+dis$pdis <- as.numeric(dis$pdis)
+dis$geodis <- as.numeric(dis$geodis)
+dis <- dis[!is.na(dis$copho), ]
+dis <- dis[dis$pdis > 0 & dis$pdis < 1 & !is.na(dis$pdis),]
+#ggplot(data = dis, aes(x = copho, y = elev_diff)) +
+#	geom_point()
+
+
+
+
+sp <- unique(sam[sam$genus == "Kikihia", "species.tree"])$species.tree
+dis2 <- dis[dis$speciesID %in% sp & dis$speciesid %in% sp,]
+
+
+library(rjags)
+library(R2jags)
+
+sink("jags.R")
+cat("
+    model{
+
+    # process model
+    for (i in 1:N){
+		pdis[i] ~ dbeta(alpha[i], beta[i])
+  		alpha[i] <- mu[i] * phi
+  		beta[i]  <- (1-mu[i]) * phi
+  		logit(mu[i]) <- 
+  			a + 
+  			b*copho[i] + 
+  			c*geodis[i] + 
+  			d*elev_diff[i] + 
+  			e*habitat_diff[i] + 
+  			f*island_diff[i] + 
+  			g*island_diff[i]*geodis[i] +
+  			#h*elev_diff[i]*copho[i] + 
+  			k*island_diff[i]*habitat_diff[i] + 
+  			#k*elev_diff[i]*habitat_diff[i] +
+  			bj[batch_block[i]]
+	}
+    
+    # random effects 
+    for(j in 1:2) {
+       bj[j] ~ dnorm(0, taubj)
+    }
+
+    # priors
+    phi ~ dgamma(.001,.001)
+    taubj ~ dgamma(.001,.001)
+    a ~ dnorm(0,.001)
+	b ~ dnorm(0,.001)
+	c ~ dnorm(0,.001)
+	d ~ dnorm(0,.001)
+	e ~ dnorm(0,.001)
+	f ~ dnorm(0,.001)
+	g ~ dnorm(0,.001)
+	#h ~ dnorm(0,.001)
+	k ~ dnorm(0,.001)
+    
+  }
+  ") ; sink()
+
+
+jags.data <- list(
+  copho = dis2$copho,
+  N = dim(dis2)[1],
+  batch_block = dis2$batch_diff+1,
+  pdis = dis2$pdis,
+  geodis = dis2$geodis,
+  elev_diff = dis2$elev_diff,
+  habitat_diff = dis2$habitat_diff+1,
+  island_diff = dis2$island_diff+1
+  )
+
+jags.model_kikihia <- jags(data = jags.data,
+                   parameters.to.save = c("phi", "taubj", "a", "b", "c", "d","e","f","g","k"), 
+                   model.file = "jags.R",
+                   n.chains = 5, 
+                   n.iter = 30000,
+                   n.burnin = 1000)
+
+traceplot(jags.model_kikihia)
+
+
+out <- data.frame(jags.model_kikihia$BUGSoutput$summary)
+out$par <- c("Intercept", "Phylogenic Distance", "Geographical Distance", "Elevation Difference", "Deviance", "Habitat Difference", "Island Difference", "Island x Geographical Distance", "Elevation x Phylogenetic Distance", "Variance", "Latent Factor Variance")
+
+out <- out[rownames(out) %in% c("b","c","d","e","f"), ]
+out2 <- out[rownames(out) %in% c("c","d"), ]
+
+aplot <- ggplot(data = out, aes(x = par, y = mean)) +
+	geom_point() +
+	geom_errorbar(aes(ymin=X2.5., ymax=X97.5.), width=0.1) +
+	ylab("Posterior Mean Effect") +
+	xlab("Variable") +
+	geom_hline(yintercept = 0, col = "red") +
+	theme_bw() +
+	theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+bplot <- ggplot(data = out2, aes(x = par, y = mean)) +
+	geom_point() +
+	geom_errorbar(aes(ymin=X2.5., ymax=X97.5.), width=0.1) +
+	ylab("Posterior Mean Effect") +
+	xlab("Variable") +
+	geom_hline(yintercept = 0, col = "red") +
+	theme_bw() +
+	theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+ggsave("aplot.png", aplot, scale = 0.4)
+ggsave("bplot.png", bplot, scale = 0.4)
+
+
+
+
+
+
+
+
+
+
+
+
+
+sp <- unique(sam[sam$genus == "Maoricicada", "species.tree"])$species.tree
+dis2 <- dis[dis$speciesID %in% sp & dis$speciesid %in% sp,]
+
+
+library(rjags)
+library(R2jags)
+
+sink("jags.R")
+cat("
+    model{
+
+    # process model
+    for (i in 1:N){
+		pdis[i] ~ dbeta(alpha[i], beta[i])
+  		alpha[i] <- mu[i] * phi
+  		beta[i]  <- (1-mu[i]) * phi
+  		logit(mu[i]) <- 
+  			a + 
+  			b*copho[i] + 
+  			c*geodis[i] + 
+  			d*elev_diff[i] + 
+  			#e*habitat_diff[i] + 
+  			f*island_diff[i] + 
+  			g*island_diff[i]*geodis[i] +
+  			h*elev_diff[i]*copho[i] + 
+  			#k*elev_diff[i]*habitat_diff[i] +
+  			bj[batch_block[i]]
+	}
+    
+    # random effects 
+    for(j in 1:2) {
+       bj[j] ~ dnorm(0, taubj)
+    }
+
+    # priors
+    phi ~ dgamma(.001,.001)
+    taubj ~ dgamma(.001,.001)
+    a ~ dnorm(0,.001)
+	b ~ dnorm(0,.001)
+	c ~ dnorm(0,.001)
+	d ~ dnorm(0,.001)
+	#e ~ dnorm(0,.001)
+	f ~ dnorm(0,.001)
+	g ~ dnorm(0,.001)
+	h ~ dnorm(0,.001)
+	#k ~ dnorm(0,.001)
+    
+  }
+  ") ; sink()
+
+
+jags.data <- list(
+  copho = dis2$copho,
+  N = dim(dis2)[1],
+  batch_block = dis2$batch_diff+1,
+  pdis = dis2$pdis,
+  geodis = dis2$geodis,
+  elev_diff = dis2$elev_diff,
+  #habitat_diff = dis2$habitat_diff,
+  island_diff = dis2$island_diff
+  )
+
+jags.model_maoricicada <- jags(data = jags.data,
+                   parameters.to.save = c("phi", "taubj", "a", "b", "c", "d","f","g","h"), 
+                   model.file = "jags.R",
+                   n.chains = 5, 
+                   n.iter = 30000,
+                   n.burnin = 1000)
+
+traceplot(jags.model_maoricicada)
+
+
+
+
+
+
+
+
+## diff
+
+library(stringr)
+
+library(RColorBrewer)
+n <- 17
+qual_col_pals = brewer.pal.info[rownames(brewer.pal.info) == 'Paired',]
+#col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+pie(rep(1,n), col=sample(col_vector, n))
+
+cols <- c("Actinobacteria" = col_vector[1],
+		  "Alphaproteobacteria" = col_vector[2],
+		  "Bacilli" = col_vector[3],
+		  "Babeliae" = NA,
+		  "Bacteroidia" = col_vector[5],
+		  "Clostridia" = col_vector[6],
+		  "Deltaproteobacteria" = col_vector[7],
+		  "Gammaproteobacteria" = col_vector[8],
+		  "Mollicutes" = col_vector[9],
+		  "Gemmatimonadetes" = NA,
+		  "Negativicutes" = col_vector[11],
+		  "Oxyphotobacteria" = NA,
+		  "Acidobacteriia" = NA,
+		  "Deinococci" = NA,
+		  "Fusobacteriia" = NA,
+		  "Thermoleophilia" = NA,
+		  "Verrucomicrobia" = NA
+		  )
+
+newphy <- subset_samples(phy1t, genus %in% "Kikihia" & batch %in% c("B3"))
+#newphy <- transform_sample_counts(newphy, function(x){ log(x +1) })
+newphy <- tax_glom(newphy, taxrank = "Genus")
+newphy <- subset_samples(newphy, sample_sums(newphy) > 0)
+newphy <- subset_samples(newphy, !is.na(habitat))
+phy <- newphy
+#phy <- merge_samples(newphy, "habitat")
+for(i in 1:dim(tax_table(phy))[2]) {
+	tax_table(phy)[,i] <- unlist(lapply(str_split(tax_table(phy)[,i], "__"), "[", 2))
+}
+#hist(log(taxa_sums(phy)), breaks = 100)
+#nam <- names(log(taxa_sums(phy))[log(taxa_sums(phy)) > 6])
+nam <- names(cols)
+#phy <- prune_taxa(taxa = nam, phy)
+phy <- subset_taxa(phy, Class %in% nam)
+phy <- subset_samples(phy, sample_sums(phy) > 0)
+phy <- transform_sample_counts(phy, function(x){ x/sum(x) })
+
+
+b3habitat <- plot_bar(phy, x = "ID", fill = "Class") +
+	facet_wrap(~habitat, scale = "free") +
+	scale_fill_manual(values = cols) +
+	theme_bw() +
+	theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+newphy <- subset_samples(phy1t, genus %in% "Kikihia" & batch %in% c("B4"))
+newphy <- tax_glom(newphy, taxrank = "Genus")
+newphy <- subset_samples(newphy, sample_sums(newphy) > 0)
+newphy <- subset_samples(newphy, !is.na(habitat))
+phy <- merge_samples(newphy, "habitat")
+hist(log(taxa_sums(phy)), breaks = 100)
+nam <- names(log(taxa_sums(phy))[log(taxa_sums(phy)) > 6])
+phy <- prune_taxa(taxa = nam, phy)
+phy <- subset_samples(phy, sample_sums(phy) > 0)
+phy <- transform_sample_counts(phy, function(x){ x/sum(x) })
+for(i in 1:dim(tax_table(phy))[2]) {
+	tax_table(phy)[,i] <- unlist(lapply(str_split(tax_table(phy)[,i], "__"), "[", 2))
+}
+
+b4habitat <- plot_bar(phy, x = "habitat", fill = "Class") +
+	#facet_wrap(~habitat, scale = "free") +
+	scale_fill_manual(values = cols) +
+	theme_bw() +
+	theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+ggarrange(b3habitat, b4habitat)
+
+ggsave("b3habitat.png", b3habitat, scale = 0.6)
+ggsave("b4habitat.png", b4habitat, scale = 0.6)
+
+
+
+
+
+
+
+
+
+newphy <- subset_samples(phy1t, genus %in% "Kikihia" & batch %in% c("B4"))
+newphy <- tax_glom(newphy, taxrank = "Genus")
+newphy <- subset_samples(newphy, sample_sums(newphy) > 0)
+newphy <- subset_samples(newphy, !is.na(habitat))
+phy <- newphy
+phy <- subset_samples(phy, sample_sums(phy) > 0)
+#phy <- transform_sample_counts(phy, function(x){ x/sum(x) })
+
+
+ord <- ordinate(phy, method = "PCoA", distance = "wunifrac")
+ordDF <- data.frame(PC1 = ord$vectors[,1], PC2 = ord$vectors[,2], habitat = sample_data(phy)$habitat)
+op <- ggplot(ordDF, aes(x = PC1, y = PC2, color = habitat)) + 
+	geom_point(alpha = 0.8, size = 4) +
+	xlab(paste("PC1", paste(round(100 * ord$values$Eigenvalues[1]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+	ylab(paste("PC2", paste(round(100 * ord$values$Eigenvalues[2]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+	scale_color_brewer(palette = "Paired") +
+	#stat_ellipse(type = "t") +
+	theme_bw() +
+	theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+

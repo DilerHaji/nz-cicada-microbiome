@@ -1,0 +1,93 @@
+T161 Redo of T153 -- Maoricicada with Rhodopsalta outgroup
+I16231	Rainbow_Skifield_Nelson_LEG	Hemiptera	Cicadidae	Maoricicada	alticola
+I16240	01NZTOMAN04 Hemiptera	Cicadidae	Maoricicada	campbelli
+I16241	04NZMBISO32 Hemiptera	Cicadidae	Maoricicada	multicostata
+I16243	04NZMBISF03 Hemiptera	Cicadidae	Maoricicada	campbelli
+I16245	03NZMKRHS02 Hemiptera	Cicadidae	Maoricicada	phaeoptera
+I16246	02NZCORSR04 Hemiptera	Cicadidae	Maoricicada	otagoensis_otagoensis
+I16247	03NZMCNIG01 Hemiptera	Cicadidae	Maoricicada	nigra_nigra
+I16248	02NZMBPAT03 Hemiptera	Cicadidae	Maoricicada	tenuis
+I16249	03NZMKSTH02 Hemiptera	Cicadidae	Maoricicada	clamitans
+I16250	02NZMKLTM30 Hemiptera	Cicadidae	Maoricicada	oromelaema
+I16251	02NZOLFRL04 Hemiptera	Cicadidae	Maoricicada	campbelli
+I16252	14NZNNSTE04 Hemiptera	Cicadidae	Maoricicada	cassiope
+I16253	02NZCOREM02 Hemiptera	Cicadidae	Maoricicada	nigra_frigida
+I16254	02NZNCNCH01	Hemiptera	Cicadidae	Maoricicada	lindsayi
+I16255	02NZTOTAS03 Hemiptera	Cicadidae	Maoricicada	iolanthe
+I16257	02NZBRMRV02	Hemiptera	Cicadidae	Maoricicada	hamiltoni
+I16258	10NZMCHUT06 Hemiptera	Cicadidae	Maoricicada	mangu
+I16259	12NZMCHUT03	Hemiptera	Cicadidae	Maoricada	cassiomelans
+I16260	06NZHBPOR12 Hemiptera	Cicadidae	Rhodopsalta	leptomera
+I16244	03NZGBMAR01	Hemiptera	Cicadidae	Rhodopsalta	cruentata
+I16256	02NZMCLCR02	Hemiptera	Cicadidae	Rhodopsalta	microdora
+
+Non-Numbered 2015 Kikihia Taxon Set
+I6843	12.NZ.NC.WAI.14_LEG	Hemiptera	Cicadidae	Kikihia	muta-tuta
+I6849	11.NZ.WD.OKT.33_LEG	Hemiptera	Cicadidae	Kikihia	southwestlandica
+I6885	08.NZ.SC.IDN.12_LEG	Hemiptera	Cicadidae	Kikihia	angusta
+I6887	02.NZ.HB.POR.08_LEG	Hemiptera	Cicadidae	Kikihia	aotea-east
+I6889	02.NZ.TO.RCG.14_LEG	Hemiptera	Cicadidae	Kikihia	aotea-west
+I6891	14.NZ.NN.STE.02_LEG	Hemiptera	Cicadidae	Kikihia	astragali
+I6893	99.NZ.99-14_LEG	Hemiptera	Cicadidae	Kikihia	cauta
+I6895	11.NZ.NN.LGU.02_LEG	Hemiptera	Cicadidae	Kikihia	flemingi
+I6897	14.NZ.NC.NIG.05_LEG	Hemiptera	Cicadidae	Kikihia	horologium
+I6899	14.NZ.BP.KMS.01_LEG	Hemiptera	Cicadidae	Kikihia	laneorum
+I6901	08.NZ.OL.RSC.01_LEG	Hemiptera	Cicadidae	Kikihia	murihikua
+I6903	02.NZ.HB.OCB.01_LEG	Hemiptera	Cicadidae	Kikihia	muta-east
+I6905	12.NZ.NC.BAL.01_LEG	Hemiptera	Cicadidae	Kikihia	muta-muta-SI
+I6907	14.NZ.NN.JDH.01_LEG	Hemiptera	Cicadidae	Kikihia	nelsonensis
+I6909	11.NZ.NN.KOB.10_LEG	Hemiptera	Cicadidae	Kikihia	northwestlandica-Coastal
+I6911	12.NZ.BR.MMK.17_LEG	Hemiptera	Cicadidae	Kikihia	northwestlandica-Inland
+I6914	03.NZ.MC.BPN.02_LEG	Hemiptera	Cicadidae	Kikihia	penisularis
+I6916	01.NZ.WN.RIM.01_LEG	Hemiptera	Cicadidae	Kikihia	subalpina
+I6918	02.NZ.NN.COR.21_LEG	Hemiptera	Cicadidae	Kikihia	tasmani
+I9904	08.NZ.NN.BES.17	Hemiptera	Cicadidae	Kikihia	tuta
+I9971	MM0031	Hemiptera	Cicadidae	Kikihia	muta-muta-NI
+I9972	MM0039	Hemiptera	Cicadidae	Kikihia	rosea
+I9973	MM0040	Hemiptera	Cicadidae	Kikihia	scutellaris
+
+2018 NovaSeq Kikihia
+I27940	98-46 / LL44	Hemiptera	Cicadidae	Kikihia	exulis
+I27897	99.NZ.MK.LOH.01 / LL1	Hemiptera	Cicadidae	Kikihia	acoustica
+I27898	14.NZ.NN.STE.01 /LL2	Hemiptera	Cicadidae	Kikihia	astragali
+I27899	02.NZ.KA.WBS.01 / LL3	Hemiptera	Cicadidae	Kikihia	balaena
+I27900	03.NF.NF.NFI.05 / LL4	Hemiptera	Cicadidae	Kikihia	convicta
+I27901	02.NZ.TD.RCG.25 / LL5	Hemiptera	Cicadidae	Kikihia	cumberi
+I27902	02.NZ.ND.MAV.09 / LL6	Hemiptera	Cicadidae	Kikihia	cutora
+I27903	02.NZ.BP.CRE.1 / LL7	Hemiptera	Cicadidae	Kikihia	dugdalei
+I27904	K.longula1997 / LL8	Hemiptera	Cicadidae	Kikihia	longula
+I27905	05.NZ.MB.TFL.01 / LL9	Hemiptera	Cicadidae	Kikihia	nelsonensis clade 1
+I27906	14.NZ.AK.PNL.04 / LL10	Hemiptera	Cicadidae	Kikihia	ochrina
+I27907	18.NZ.KA.KAI.3 / LL11	Hemiptera	Cicadidae	Kikihia	paxillulae
+I27908	 05.NZ.MB.TFL.03 / LL12	Hemiptera	Cicadidae	Kikihia	tuta clade 1
+I27909	02.NZ.NN.TTA.35 / LL13	Hemiptera	Cicadidae	Kikihia	tuta clade 2
+
+2018 NovaSeq Maoricicada
+I27941	04.NZ.MB.ISF.02 / LL45	Hemiptera	Cicadidae	Maoricicada	mangu multicostata
+I27910	06.NZ.SC.BOU.05 / LL14	Hemiptera	Cicadidae	Maoricicada	campbelli Canterbury clade
+I27911	12.MC.HUT.01 / LL15	Hemiptera	Cicadidae	Maoricicada	cassiomelans
+I27912	01.NZ.XX.BRR-01 / LL16	Hemiptera	Cicadidae	Maoricicada	cassiope
+I27913	03.SC.HPS.03 / LL16	Hemiptera	Cicadidae	Maoricicada	clamitans
+I27914	02.CO.AWT.14 / LL17	Hemiptera	Cicadidae	Maoricicada	clamitans
+I27915	17-NZ.WA.THR.01 / LL18	Hemiptera	Cicadidae	Maoricicada	hamiltoni North Island
+I27916	02.NZ.WA.BUL.02 / LL19	Hemiptera	Cicadidae	Maoricicada	iolanthe
+I27917	06.NZ.KA.CAM.04 / LL20	Hemiptera	Cicadidae	Maoricicada	lindsayi
+I27918	17.NZ.CO.AWC.03 / LL21	Hemiptera	Cicadidae	Maoricicada	mangu "awakino"
+I27919	10.NZ.MC.HTL.01 / LL23	Hemiptera	Cicadidae	Maoricicada	mangu mangu
+I27920	02.NZ.WN.ORO.03 / LL24	Hemiptera	Cicadidae	Maoricicada	myersi
+I27921	02.OL.TLC.03 / LL25	Hemiptera	Cicadidae	Maoricicada	nigra frigida
+I27922	03.NC.TBS.01 / LL26	Hemiptera	Cicadidae	Maoricicada	nigra nigra
+I27923	02.NC.TBS.01 / LL27	Hemiptera	Cicadidae	Maoricicada	oromelaena
+I27924	05.NZ.SL.CLA.07 / LL28	Hemiptera	Cicadidae	Maoricicada	otagoensis maceweni 
+I27925	Lark / LL29	Hemiptera	Cicadidae	Maoricicada	otagoensis maceweni 
+I27926	05.NZ.CO.WBG.02 / LL30	Hemiptera	Cicadidae	Maoricicada	otagoensis otagoensis
+I27927	02.CO.AWT.13 / LL31	Hemiptera	Cicadidae	Maoricicada	phaeoptera
+I27928	03.NZ.BR.MMU.01 / LL32	Hemiptera	Cicadidae	Maoricicada	tenuis
+I27929	14.NZ.MB.RST.01 / LL33	Hemiptera	Cicadidae	Maoricicada	false alticola
+
+2018 NovaSeq outgroup
+I27942	98-13 / LL46	Hemiptera	Cicadidae	Pauropsalta	johanae
+I27943	98-21 / LL47	Hemiptera	Cicadidae	Pauropsalta	judithi
+I27944	98-45 / LL48	Hemiptera	Cicadidae	Myersalna	depicta
+
+PHASED ALLELES

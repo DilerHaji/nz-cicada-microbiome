@@ -1,0 +1,67 @@
+## Made the manifest file for ProjK, ProjP, and HybridZone samples
+# Copied all fastq.gz files for both reverse and forward reads to fastq folder
+# USING QIIME2 qiime2-2018.8
+
+
+#######################
+## Log for denoised dada2 flow 
+######################
+
+
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path manifest.txt \
+  --input-format PairedEndFastqManifestPhred33 \
+  --output-path nzbiome.qza
+  
+qiime demux summarize \
+  --i-data nzbiome.qza \
+  --o-visualization nzbiome.qzv
+  
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs nzbiome.qza \
+  --p-trim-left-f 13 \
+  --p-trim-left-r 13 \
+  --p-trunc-len-f 150 \
+  --p-trunc-len-r 150 \
+  --o-table nzbiome-dada-table.qza \
+  --o-representative-sequences nzbiome-dada-rep-seqs.qza \
+  --o-denoising-stats nzbiome-dada-denoising-stats.qza
+
+qiime feature-table summarize \
+  --i-table nzbiome-dada-table.qza \
+  --o-visualization nzbiome-dada-table.qzv \
+  --m-sample-metadata-file nzbiome-dada-sample-metadata.tsv
+
+qiime feature-table tabulate-seqs \
+  --i-data nzbiome-dada-rep-seqs.qza \
+  --o-visualization nzbiome-dada-rep-seqs.qzv
+  
+qiime metadata tabulate \
+  --m-input-file nzbiome-dada-denoising-stats.qza \
+  --o-visualization nzbiome-dada-denoising-stats.qzv
+  
+
+
+
+
+
+
+
+
+
+
+#######################
+## Log for trimmed and merged, not denoised, 1% OTUs
+#######################
+
+
+module load Trimmomatic
+trimmomatic-0.36.jar SE -phred33 ${a} trimmed/${a} LEADING:25 TRAILING:25 
+
+module load bbmap
+bbmerge.sh in1=${a}_L001_R1_001.fastq in2=${a}_L001_R2_001.fastq out=${a}_merged.fastq outu1=${a}_R1_unmerged.fastq outu2=${a}_R2_unmerged.fastq
+
+
+# next steps
+cluster 

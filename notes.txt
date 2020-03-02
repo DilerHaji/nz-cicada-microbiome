@@ -1,0 +1,37 @@
+### Notes for host phylogeny
+
+I9909 Platypedia putnami
+I6883 Megatibicen resonans
+I16244 R cruentata
+I16256 R microdora
+I16260 R leptomera
+
+
+module load blast 
+module load python/2.7.8
+module load bwa
+module load samtools
+
+array=(I28096 I28097 I28098 I28099 I28100 I28101 I28102 I28103 I28104 I28105 I28106 I28107 I28108 I28109 I28110 I28111)
+
+for a in "${array[@]}";
+do
+makeblastdb -in /home/CAM/egordon/Dropbox/${a}/trimmedspades.assembly/contigs.fasta -dbtype nucl
+tblastx -query co1.fasta -db /home/CAM/egordon/Dropbox/${a}/trimmedspades.assembly/contigs.fasta -outfmt 6 -out ${a}_co1.res -evalue 1e-50 -query_gencode 5 -db_gencode 5
+python getseq.py ${a}_co1.res 0.0001 /home/CAM/egordon/Dropbox/${a}/trimmedspades.assembly/contigs.fasta > ${a}_mito.fasta
+bwa index ${a}_mito.fasta
+bwa mem -t 32 -k 50 -B 10 -O 10 -T 90 ${a}_mito.fasta /home/CAM/egordon/Dropbox/${a}/${a}_dedup_R1.fastq.gz /home/CAM/egordon/Dropbox/${a}/${a}_dedup_R2.fastq.gz > ${a}_bwafile
+samtools view -b -F 4 ${a}_bwafile > ${a}_mapped.bam
+samtools fastq ${a}_mapped.bam > ${a}_mapped.fastq
+/home/CAM/egordon/spades/SPAdes-3.12.0-Linux/bin/spades.py -t 32 -s ${a}_mapped.fastq -o ${a}_mito.spades.assembly/
+done
+
+
+
+
+### For kikihia 
+
+NO scutellaris in kikihia mitogenome alignment!
+
+
+
