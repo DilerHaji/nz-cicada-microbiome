@@ -1,0 +1,257 @@
+module load Miniconda/4.7.12
+source activate /isg/shared/apps/qiime/qiime2-2019.7
+
+
+##########################################
+Importing data into Qiime2 artifacts
+##########################################
+
+array=(projk projp jt jk)
+
+for a in "${array[@]}";
+do
+
+qiime tools import \
+--type 'SampleData[PairedEndSequencesWithQuality]' \
+--input-path manifest_${a}.txt \
+--input-format PairedEndFastqManifestPhred33 \
+--output-path manifest_${a}.qza
+
+qiime demux summarize \
+--i-data manifest_${a}.qza \
+--o-visualization manifest_${a}.qzv
+
+done
+
+
+
+##########################################
+Denoising with DADA2 pipeline 
+##########################################
+
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs manifest_projk.qza \
+  --p-trunc-len-f 163 \
+  --p-trunc-len-r 126 \
+  --p-max-ee-f 1.5 \
+  --p-max-ee-r 1.5 \
+  --p-n-threads 36 \
+  --p-n-reads-learn 1000000 \
+  --o-table projk_table.qza \
+  --o-representative-sequences projk_rep.qza \
+  --o-denoising-stats projk_denoising_stats.qza
+
+qiime dada2 denoise-single \
+  --i-demultiplexed-seqs manifest_projp_single.qza \
+  --p-trunc-len 107 \
+  --p-n-threads 0 \
+  --p-max-ee 1.5 \
+  --p-n-reads-learn 1000000 \
+  --o-table projp_single_table.qza \
+  --o-representative-sequences projp_single_rep.qza \
+  --o-denoising-stats projp_single_denoising_stats.qza
+
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs manifest_jt.qza \
+  --p-trunc-len-f 182 \
+  --p-trunc-len-r 132 \
+  --p-n-threads 36 \
+  --p-n-reads-learn 964286 \
+  --o-table jt_table.qza \
+  --o-representative-sequences jt_rep.qza \
+  --o-denoising-stats jt_denoising_stats.qza
+  
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs manifest_jk.qza \
+  --p-trunc-len-f 173 \
+  --p-trunc-len-r 144 \
+  --p-n-threads 36 \
+  --p-n-reads-learn 1000000 \
+  --o-table jk_table.qza \
+  --o-representative-sequences jk_rep.qza \
+  --o-denoising-stats jk_denoising_stats.qza
+
+
+
+
+##########################################
+Post-DADA2 visualizations 
+##########################################
+
+array=(projk projp jt jk)
+
+for a in "${array[@]}";
+do
+
+qiime feature-table tabulate-seqs \
+--i-data ${a}_table.qza \
+--o-visualization ${a}_tab.qzv 
+
+qiime metadata tabulate \
+--m-input-file ${a}_denoising_stats.qza \
+--o-visualization ${a}_denoising_stats.qzv
+
+qiime feature-table summarize \
+--i-table ${a}_table.qza \
+--o-visualization ${a}_table.qzv \
+
+done
+
+
+
+
+##########################################
+SILVA 16S Reference sequences and taxonomy  
+##########################################
+
+#### 1% clustering ####
+
+qiime tools import \
+--type 'FeatureData[Sequence]' \
+--input-path /home/CAM/dhaji/SILVA_132_QIIME_release/rep_set/rep_set_16S_only/99/silva_132_99_16S.fna \
+--output-path 99_otus_16S.qza
+
+qiime tools import \
+--type 'FeatureData[Taxonomy]' \
+--input-format HeaderlessTSVTaxonomyFormat \
+--input-path /home/CAM/dhaji/SILVA_132_QIIME_release/taxonomy/16S_only/99/majority_taxonomy_7_levels.txt \
+--output-path 99_otus_16S_taxonomy.qza
+
+qiime feature-classifier extract-reads \
+--i-sequences 99_otus_16S.qza \
+--p-f-primer GTGCCAGCMGCCGCGGTAA \
+--p-r-primer GGACTACHVGGGTWTCTAAT \
+--p-min-length 200 \
+--p-max-length 300 \
+--o-reads silva_v4.qza \
+
+
+
+
+##########################################
+Training taxonomic classifier   
+##########################################
+
+qiime feature-classifier fit-classifier-naive-bayes \
+--i-reference-reads silva_v4.qza \
+--i-reference-taxonomy 99_otus_16S_taxonomy.qza \
+--o-classifier classifier_silva_v4.qza
+
+
+
+
+
+
+##########################################
+Classification 
+##########################################
+
+array=(projk projp jt jk)
+
+for a in "${array[@]}";
+do
+
+qiime feature-classifier classify-sklearn \
+--i-classifier classifier_silva_v4.qza \
+--i-reads ${a}_rep.qza \
+--o-classification ${a}_classified.qza
+
+qiime metadata tabulate \
+--m-input-file ${a}_classified.qza \
+--o-visualization ${a}_classified.qzv
+
+done
+
+
+
+
+
+##########################################
+Phylogeny with IQ-Tree
+##########################################
+
+array=(projk projp jt jk)
+
+for a in "${array[@]}";
+do
+
+qiime phylogeny align-to-tree-mafft-fasttree \
+--i-sequences ${a}_rep.qza \
+--output-dir ${a}_tree \
+--p-n-threads 0 
+
+done
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+##########################################
+SILVA 16S Reference sequences and taxonomy  
+##########################################
+
+## 1% clustering
+qiime tools import \
+--type 'FeatureData[Sequence]' \
+--input-path /home/CAM/dhaji/SILVA_132_QIIME_release/rep_set/rep_set_16S_only/99/silva_132_99_16S.fna \
+--output-path 99_otus_16S.qza
+
+# The taxonomy strings
+qiime tools import \
+--type 'FeatureData[Taxonomy]' \
+--input-format HeaderlessTSVTaxonomyFormat \
+--input-path taxonomy/16S_only/99/majority_taxonomy_7_levels.txt \
+--output-path 99_otus_16S_taxonomy.qza
+
+
+## 3% clustering 
+
+
+
+
+
+
+
+
+
+
+
+
+
+qiime vsearch cluster-features-open-reference \
+--i-sequences projk_rep.qza \
+--i-table projk_table.qza \
+--i-reference-sequences 
+
+
+
+
+ 
+
+
