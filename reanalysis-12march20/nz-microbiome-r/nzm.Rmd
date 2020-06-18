@@ -1,0 +1,2190 @@
+---
+title: "NZM"
+output: html_notebook
+---
+
+#### Packages, functions, colors, and data 
+
+```{r}
+#if (!requireNamespace("devtools", quietly = TRUE)){install.packages("devtools")}
+#devtools::install_github("jbisanz/qiime2R") 
+#install.packages("ggmsa")
+#install.packages("seqmagick")
+library(phyloseq, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(stringr, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(seqinr, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(ggplot2, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(png)
+library(tidyr, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(dplyr, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(decontam, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(ggpubr, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(ggrepel, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(pheatmap, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(scales, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(RColorBrewer, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(vegan, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(grid, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(cowplot, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+
+```
+Loading packages. 
+
+```{r}
+
+# For spliting strings by "split_character" and returning "position_number" section 
+stringsplit <- function(x, split_character, position_number){ 
+  unlist(lapply(str_split(x, split_character), "[", position_number)) 
+  }
+
+
+# Returns an edited taxonomy table for downstream analysis. 
+tax_gza_to_phyloseq <- function(path_tax_gza) {
+  taxonomy <- read_qza(path_tax_gza)
+  taxonomy <- data.frame(taxonomy$data)
+  kingdom <- sapply(stringr::str_split(sapply(str_split(as.character(taxonomy$Taxon),";D_"), "[", 1), "__"), "[", 2)
+  phylum <- sapply(stringr::str_split(sapply(str_split(as.character(taxonomy$Taxon),";D_"), "[", 2), "__"), "[", 2)
+  class <- sapply(stringr::str_split(sapply(str_split(as.character(taxonomy$Taxon),";D_"), "[", 3), "__"), "[", 2)
+  order <- sapply(stringr::str_split(sapply(str_split(as.character(taxonomy$Taxon),";D_"), "[", 4), "__"), "[", 2)
+  family <- sapply(stringr::str_split(sapply(str_split(as.character(taxonomy$Taxon),";D_"), "[", 5), "__"), "[", 2)
+  genus <- sapply(stringr::str_split(sapply(str_split(as.character(taxonomy$Taxon),";D_"), "[", 6), "__"), "[", 2)
+  feature_id <- taxonomy$Feature.ID
+  confidence <- taxonomy$Confidence
+  taxonomy <- data.frame(Kingdom = kingdom, Phylum = phylum, Class = class, Order = order, Family = family, Genus = genus, Confidence = confidence)
+  rownames(taxonomy) <- feature_id
+  return(taxonomy) 
+}
+
+# Converts phyloseq object into a table with abundance and taxonomy information across ASVs and samples. 
+dtable <-  function(ps) {
+  if (!is.na(match(colnames(t(ps@otu_table)), row.names(ps@sam_data)))[1]) {
+    h <- data.frame(t(ps@otu_table@.Data), check.names = FALSE)
+    h$sum <- apply(h, 1, sum)
+    tax <- data.frame(ps@tax_table@.Data, check.names = FALSE)
+    h2 <- cbind(h, tax)
+    h2 <- h2[order(h2$sum, decreasing = TRUE),]
+    h2 <- h2[, colnames(h2) != "sum"]
+    #i <- sapply(h2, is.factor)
+    #h2[i] <- lapply(h2[i], as.character)
+    return(h2)} else {
+      h <- data.frame(ps@otu_table@.Data, check.names = FALSE)
+      h$sum <- apply(h, 1, sum)
+      tax <- data.frame(ps@tax_table@.Data, check.names = FALSE)
+      h2 <- cbind(h, tax)
+      h2 <- h2[order(h2$sum, decreasing = TRUE),]
+      h2 <- h2[, colnames(h2) != "sum"]
+      #i <- sapply(h2, is.factor)
+      #h2[i] <- lapply(h2[i], as.character)
+      return(h2)
+    }
+}
+
+# For each sample in the phyloseq object, the top n ASV names per sample are combined ("top_names") and these ASVs are extracted from the dataset. The new phyloseq object is converted into a table with all abundance and taxonomy information across ASVs and samples ("top_table"). Two additional tables are created in long format with absolute abundances ("top_absolute") and relative abundances ("top_relative"). 
+top_tax <- function(phy, n){
+  table <- dtable(phy)
+  sample_columns <- 1:length(sample_names(phy))
+  asv_names <- row.names(dtable(phy))
+  tx <- list()
+  # Creates a table documenting the ASV names of the top ASVs per sample
+  tx[["top_names"]] <- apply(table[,sample_columns], 2, function(x){ 
+    row.names(table[order(x, decreasing = TRUE),])[1:n]}
+    )
+  # Makes a table of all top taxa and adds the ASV names as a column to that table 
+  table_subset <- table[asv_names %in% as.character(tx[["top_names"]]),]
+  tx[["top_table"]] <- cbind.data.frame(
+     table_subset, 
+     taxa = as.character(rownames(table_subset))
+     )
+  # Converts taxonomy columns to character  
+  factor_columns <- sapply(tx[["top_table"]], is.factor)
+  tx[["top_table"]][factor_columns] <- lapply(tx[["top_table"]][factor_columns], as.character)
+  # Absolute abundances in long-format table
+  tx[["top_absolute"]] <- gather(tx[["top_table"]], key = sample, value = abundance, sample_columns)
+  # Relative abundances in long-format table
+  tx[["top_relative"]] <- gather(
+    cbind(
+      # Making abundances relative to total abundance 
+      apply(tx[["top_table"]][,sample_columns], 2, function(x){x/sum(x)}),
+      # Getting taxonomy information
+      tx[["top_table"]][,(max(sample_columns)+1):dim(tx[["top_table"]])[2]]), 
+    key = sample, value = abundance, sample_columns)  
+  return(tx)
+}
+
+# Collapses nodes on phylogenic tree into a polytomy at a given nodal support threshold. 
+collapse_nodes <- function(t1, threshold){
+  for (i in 1:t1$Nnode){
+    #print (i)
+    if (!is.na(as.numeric(t1$node.label[i])) & as.numeric(t1$node.label[i]) < threshold){
+      t1$edge.length[t1$edge[,1] == length(t1$tip.label)+i] <- t1$edge.length[t1$edge[,1] == length(t1$tip.label) + i] + t1$edge.length[which(t1$edge[,2] == length(t1$tip.label)+i)]
+      t1$edge.length[which(t1$edge[,2] == length(t1$tip.label)+i)] <- 0
+    }
+  }
+  t2 <- ape::di2multi(t1)
+  return(t2)
+}
+
+
+# Theme for ggplot
+theme_new <- function (){ 
+  theme(axis.line.y = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.line.x = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        plot.margin = margin(0, 0, 0, 0, "cm"), 
+        legend.position="none", 
+        panel.background=element_blank(),
+        panel.grid.major=element_blank(),
+        plot.background=element_blank())
+}
+
+# Functions for plotting ggtree with ggplots (from https://thackl.github.io/ggtree-composite-plots)
+tree_y <-  function(ggtree, data){
+  if(!inherits(ggtree, "ggtree"))
+    stop("not a ggtree object")
+  left_join(select(data, label), select(ggtree$data, label, y)) %>%
+    pull(y)
+}
+scale_y_tree <- function(expand=expansion(0, 0.6), ...){
+    scale_y_continuous(expand=expand, ...)
+}
+
+tree_ylim <- function(ggtree){
+  if(!inherits(ggtree, "ggtree"))
+    stop("not a ggtree object")
+  range(ggtree$data$y)
+}
+ggtreeplot <- function(ggtree, data = NULL, mapping = aes(), flip=FALSE,
+     expand_limits=expansion(0,.6), ...){
+  
+  if(!inherits(ggtree, "ggtree"))
+    stop("not a ggtree object")
+
+  # match the tree limits
+  limits <- tree_ylim(ggtree)
+  limits[1] <- limits[1] + (limits[1] * expand_limits[1]) - expand_limits[2]
+  limits[2] <- limits[2] + (limits[2] * expand_limits[3]) + expand_limits[4]
+  
+  if(flip){
+    mapping <- modifyList(aes_(x=~x), mapping)
+    data <- mutate(data, x=tree_y(ggtree, data))
+    gg <- ggplot(data=data, mapping = mapping, ...) +
+      scale_x_continuous(limits=limits, expand=c(0,0))
+  }else{
+    mapping <- modifyList(aes_(y=~y), mapping)
+    data <- mutate(data, y=tree_y(ggtree, data))
+    gg <- ggplot(data=data, mapping = mapping, ...) +
+      scale_y_continuous(limits=limits, expand=c(0,0))
+  }
+  gg
+}
+
+# Function to add tip to tree (Taken from http://blog.phytools.org/2012/11/adding-single-tip-to-tree.html)
+bind.tip<-function(tree,tip.label,edge.length=NULL,where=NULL){
+  if(is.null(where)) where<-length(tree$tip)+1
+  tip<-list(edge=matrix(c(2,1),1,2),
+    tip.label=tip.label,
+    edge.length=edge.length,
+    Nnode=1)
+  class(tip)<-"phylo"
+  obj<-bind.tree(tree,tip,where=where)
+  return(obj)
+}
+
+```
+Defining functions. 
+
+```{r}
+cbcolors <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+paired_colors <- brewer.pal(n = 12, name = "Paired" )
+set3_colors <- brewer.pal(n = 8, name = "Set3" )
+set2_colors <- brewer.pal(n = 8, name = "Set2" )
+
+major_groups_colors <- c("Candidatus Sulcia" = paired_colors[3], "Candidatus Hodgkinia" = paired_colors[6], "Ophiocordyceps" = paired_colors[11], "Cicada Mitochondria" = "grey10", "Other Mitochondria" = paired_colors[12], "Chloroplast" = paired_colors[4], "Archaea" = "grey50", "Bacteria" = "grey")
+
+tissue_type_colors <- c("bacteriome" = paired_colors[5], "control" = "black", "egg" = paired_colors[7], "gut" = paired_colors[9], "reproductive" = paired_colors[10])
+
+genus_colors <- c("Kikihia" = paired_colors[1], "Maoricicada" = paired_colors[2], "Rhodopsalta" = "navyblue", "Outgroup" = "grey", "Magicicada" = "grey40", "Amphipsalta" = "black", "Platypedia" = paired_colors[4], "Neotibicen" = paired_colors[5], "nymph" = paired_colors[6])
+
+dataset_shapes <- c("B1" = 15, "B2" = 16, "B3" = 17)
+
+```
+Defining figure colors. 
+
+```{r}
+
+library(qiime2R)
+
+b1_table <- otu_table(read_qza("../jk_table.qza")$data, taxa_are_rows = TRUE) 
+b2_table <- otu_table(read_qza("../projk_table.qza")$data, taxa_are_rows = TRUE) 
+b3_table <- otu_table(read_qza("../projp_table.qza")$data, taxa_are_rows = TRUE) 
+
+b1_classification <- tax_table(as.matrix(tax_gza_to_phyloseq("../jk_classified.qza")))
+b2_classification <- tax_table(as.matrix(tax_gza_to_phyloseq("../projk_classified.qza")))
+b3_classification <- tax_table(as.matrix(tax_gza_to_phyloseq("../projp_classified.qza")))
+
+b1_phylogeny <- phy_tree(read_qza("../jk_tree/rooted_tree.qza")$data)
+b2_phylogeny <- phy_tree(read_qza("../projk_tree/rooted_tree.qza")$data)
+b3_phylogeny <- phy_tree(read_qza("../projp_tree/rooted_tree.qza")$data)
+
+metadata <- read.csv("../metadata.csv", stringsAsFactors = FALSE)
+rownames(metadata) <- metadata$SampleID
+
+b1_metadata <- sample_data(metadata[metadata$batch == "B1", ])
+b2_metadata <- sample_data(metadata[metadata$batch == "B2", ])
+b3_metadata <- sample_data(metadata[metadata$batch == "B3", ])
+
+unloadNamespace("qiime2R")
+
+b1 <- phyloseq(b1_table, b1_classification, b1_phylogeny, b1_metadata)
+b2 <- phyloseq(b2_table, b2_classification, b2_phylogeny, b2_metadata)
+b3 <- phyloseq(b3_table, b3_classification, b3_phylogeny, b3_metadata)
+
+nzm <- list(b1, b2, b3)
+nzm_names <- c("b1", "b2", "b3")
+
+nzm <- lapply(nzm, function(x){
+  subset_samples(x, !type %in% "uncertain")
+})
+
+nzm
+
+```
+ASV tables, taxonomys, phylogenys, and metadata are imported and then combined into phyloseq objects associated with each dataset.  
+
+
+#### Non-target taxonomic groups 
+
+```{r}
+
+for(i in c("b1", "b2", "b3")){
+  
+  # Importing representative ASV sequences output from Qiime2. 
+  rep_seqs <- read.fasta(paste("../", i, "_seqs.fasta", sep = ""), as.string = "TRUE", forceDNAtolower = FALSE)
+  
+  # Getting the ASV names corresponding to major taxonomic groups 
+  arch <- taxa_names(subset_taxa(get(i), Kingdom %in% c("Archaea")))
+  chlor <- taxa_names(subset_taxa(get(i), Order %in% c("Chloroplast")))
+  mito <- taxa_names(subset_taxa(get(i), Family %in% c("Mitochondria")))
+  hodg <- taxa_names(subset_taxa(get(i), Genus %in% c("Candidatus Sulcia")))
+  sulc <- taxa_names(subset_taxa(get(i), Genus %in% c("Candidatus Hodgkinia")))
+  
+  # For each of the major taxonomic groups, saving a fasta file with the extracted ASV sequences.
+  for(j in c('arch', 'chlor', 'mito', 'hodg', 'sulc')){
+    rep_seqs_subset <- rep_seqs[names(rep_seqs) %in% get(j)]
+    names(rep_seqs_subset) <- paste(i, names(rep_seqs_subset), sep = "_")
+    write.fasta(sequences = rep_seqs_subset, names = names(rep_seqs_subset), file.out = paste(paste(i, j, sep = "_"), ".fasta", sep = ""))
+    rm(j)
+    }
+  rm(rep_seqs)
+  
+}
+
+```
+Sequences of ASVs classified to each endosymbiont (either Hodgkinia or Sulcia), mitochondria, chloroplast, and archaea are exported into respective fasta files. Mitochondrial ASVs are then aligned to a reference set of insect and Ophiocordyceps (symbiont and pathogen) 16s sequences extracted from published datasets. This alignment is used to construct a neighbor joining tree showing that high-abundance mitochondrial ASVs group with known Ophiocordyceps symbionts of cicadas. 
+
+```{r}
+
+# Combining all fasta files with annotated mitochondrial ASV sequences (all_mito_annotated.fasta) and importing into environment
+system("cat b1_mito_annotated.fasta b2_mito_annotated.fasta b3_mito_annotated.fasta old_b2_mito_annotated_jt_jefrin.fasta > all_mito_annotated.fasta")
+mito_annotated <- read.fasta("all_mito_annotated.fasta")
+
+# Extracting the ASV name from the sequence headers and saving into object corresponding to Ophiocordyceps ASVs (ophio_asv_names) and Cicada mitochondrial 16s ASVs (cicada_asv_names)
+ophio_asv_names <- unlist(lapply(str_split(names(mito_annotated[which(unlist(lapply(str_split(names(mito_annotated), "_"), "[", 3)) == "ophiocordyceps")]), "_"), "[", 2))
+cicada_asv_names <- unlist(lapply(str_split(names(mito_annotated[which(unlist(lapply(str_split(names(mito_annotated), "_"), "[", 3)) == "cicada")]), "_"), "[", 2))
+
+# Replacing the Genus-level classifications in the original phyloseq datasets for Ophiocordyceps ASVs and Cicada mitochondrial 16s ASVs to reflect annotations. 
+for(i in 1:3){
+  tax_table(nzm[[i]])[rownames(tax_table(nzm[[1]])) %in% ophio_asv_names, "Genus"] <- "Ophiocordyceps"
+  tax_table(nzm[[i]])[rownames(tax_table(nzm[[1]])) %in% cicada_asv_names, "Genus"] <- "Cicada Mitochondria"
+}
+
+```
+Replaces Genus-level taxonomic classifications for Ophiocordyceps ASVs to "Ophiocordyceps" and those for cicada mitochondrial 16s to "Cicada Mitochondria" in original datasets.
+
+
+#### Fig.S: qPCR Data
+
+```{r}
+
+qpcr <- read.csv("../qpcr.csv")
+qpcr_mean <- aggregate(qpcr$Starting.Quantity..SQ., by = list(qpcr$Target), function(x){mean(x, na.rm = TRUE)})
+
+qpcr_summary <- data.frame()
+for(i in 1:3){
+  input <- nzm[[i]]
+  sample_data(input)$qpcr <- qpcr_mean[,2][match(sample_data(input)$ID, qpcr_mean[,1])]
+  qpcr_summary <- rbind(qpcr_summary, sample_data(input))
+}
+qpcr_summary <- qpcr_summary[!is.na(qpcr_summary$conc) & !is.na(qpcr_summary$qpcr),]
+
+qpcr_plot <- ggplot(qpcr_summary, aes(x = sqrt(qpcr), y = sqrt(conc), shape = batch)) +
+  geom_point(size = 3) +
+  geom_text_repel(aes(label = paste(species, code, sep = ":")), size = 2) +
+  geom_smooth(qpcr_summary, mapping = aes(x = sqrt(qpcr), y = sqrt(conc)), method = "lm", se = FALSE, size = 0.2, inherit.aes = FALSE) +
+  labs(x = "sqrt(qPCR Starting Quantity)", y = "sqrt(QIAxcel Post-PCR Concentration)", shape = "Dataset") +
+  scale_shape_manual(values = dataset_shapes) +
+  theme_bw() +
+  theme(plot.margin = unit(c(1,1,1,1), "cm"), aspect.ratio = 1)
+
+ggsave("qpcr.png", scale = 2, qpcr_plot)
+qpcr_plot
+
+```
+
+
+#### Filtering feature tables, Part 1
+
+```{r}
+
+nzm_filtered <- list()
+for(i in 1:3){
+  
+  # Removing ASVs with unclassified Kingdom, Phylum, or Class taxonomic ranks 
+  x <- subset_taxa(nzm[[i]], !is.na(Kingdom) & !is.na(Phylum) & !is.na(Class))
+  
+  # Remving ASVs with classifications to Eukaryota, Archaea, Chloroplast, Mitochondria, Sulcia (all Blattabacteriaceae), and Hodgkinia at various taxonomic ranks
+  x <- subset_taxa(x, !Kingdom %in% c("Eukaryota"))
+  x <- subset_taxa(x, !Kingdom %in% c("Archaea"))
+  x <- subset_taxa(x, !Order %in% c("Chloroplast"))
+  x <- subset_taxa(x, !Family %in% c("Mitochondria"))
+  x <- subset_taxa(x, !Family %in% c("Blattabacteriaceae"))
+  x <- subset_taxa(x, !Genus %in% c("Candidatus Hodgkinia"))
+  
+  # Removing any ASV with a total abunadance across all samples of less than 3.
+  x <- subset_taxa(x, taxa_sums(x) > 2)
+  
+  # Removing any sample with total abundance across all remaining ASVs of less than 101
+  x <- subset_samples(x, sample_sums(x) > 100)
+  
+  # Agglomerating ASVs based on a tree height of 0.03
+  nzm_filtered[[i]] <- tip_glom(x, h = 0.03)
+  
+}
+nzm_filtered
+
+```
+First round of filtering: (1) Non-bacterial and obligate symbiotic bacteria are removed. (2) Remaining samples with a total abundance of less than three are removed. (3) All remaining bacterial taxa are agglomerated using a phylogenetic tree at a tree height of 0.03. 
+
+#### Fig.S: Decontam identification of contaminants using controls 
+
+```{r}
+
+contaminant_genera <- c()
+contaminant_asvs <- c()
+for(i in 2:3){
+  input <- nzm_filtered[[i]]
+  sample_data(input)$is.neg <- sample_data(input)$type == "control"
+  decontam <- isContaminant(input, method="prevalence", neg="is.neg", threshold=0.3)
+  contaminant_genera <- c(contaminant_genera, as.character(dtable(subset_taxa(input, taxa_names(input) %in% taxa_names(input)[c(which(decontam$contaminant))]))$Genus))
+  contaminant_asvs <- c(contaminant_asvs, rownames(dtable(subset_taxa(input, taxa_names(input) %in% taxa_names(input)[c(which(decontam$contaminant))]))))
+}
+unique(contaminant_genera[!is.na(contaminant_genera)])
+
+```
+Contaminant taxa identified using controls for the B2 and B3 datasets. 
+
+
+```{r}
+new_table <- c()
+for(i in 2:3){
+  input <- nzm[[i]]
+  controls <- subset_taxa(subset_samples(input, type %in% "control"))
+  table <- top_tax(controls, 10)[["top_relative"]]
+  sample_data(input)$depth <- sample_sums(input)
+  table <- cbind(table, sample_data(input)[match(table$sample, sample_data(input)$SampleID), ])
+  table[table$Family %in% "Blattabacteriaceae", "Genus"] <- "Blattabacteriaceae (Sulcia)"
+  table[!table$Genus %in% c("Blattabacteriaceae (Sulcia)", contaminant_genera), "Genus"] <- "other"
+  table[is.na(table$Genus), "Genus"] <- "other"
+  table[table$Genus %in% "uncultured bacterium", "Genus"] <- "other"
+  table[table$Genus %in% "uncultured soil bacterium", "Genus"] <- "other"
+  table[table$Genus %in% contaminant_genera, "Genus"] <- paste(table[table$Genus %in% contaminant_genera, "Genus"], "(contaminant)", sep = " ")
+  new_table <- rbind(new_table, table)
+  }
+
+control_plot <- ggplot(new_table, aes(x = paste(sample, species, batch, depth, sep = ": "), y = abundance, fill = Genus)) +
+  geom_bar(stat = "identity", position = "stack") +
+  #scale_fill_brewer(palette = "Paired") +
+  labs(x = "", y = "", fill = "") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 5),
+        axis.text.x = element_blank(), 
+        legend.key.size = unit(0.4, "cm"), 
+        plot.margin = unit(c(0.5,0.5,0.5,0.5), "cm"), 
+        aspect.ratio = 2) + 
+  coord_flip()
+
+ggsave("control_plot.png", control_plot, scale = 1)
+control_plot
+
+```
+
+
+
+#### Filtering feature tables, Part 2
+
+```{r}
+nzm_filtered2 <- list()
+for(i in 1:3){
+  x <- nzm_filtered[[i]]
+  x <- subset_taxa(x, !taxa_names(x) %in% contaminant_asvs)
+  x <- subset_taxa(x, !Genus %in% unique(contaminant_genera[!is.na(contaminant_genera)]))
+  x <- subset_samples(x, sample_sums(x) > 100)
+  x <- subset_taxa(x, taxa_sums(x) > 1)
+  nzm_filtered2[[i]] <- x 
+}
+nzm_filtered2
+
+```
+Second round of filtering: (1) Removing ASVs identified as contaminants. (2) Removing all remaining ASVs that have the same Genus-level taxonomic classification as the contaminant ASVs. (3) Removing samples with a total abundance of 100 or less. (4) Removing bacterial ASVs with a total abundance across all samples of less than two. 
+
+#### Fig.S: Relative abundance of major taxonomic groups across all samples (barplot).
+
+```{r}
+
+major_group_names <- c("Candidatus Sulcia", "Candidatus Hodgkinia", "Ophiocordyceps", "Cicada Mitochondria", "Other Mitochondria", "Chloroplast", "Archaea", "Bacteria")
+
+major_table <- data.frame()
+for(j in 1:3){
+  phy <- nzm[[j]]
+  nam <- list()
+  
+  # Each element in nam list corresponds to ASV names of each of the major groups defined above 
+  nam[[1]] <- taxa_names(subset_taxa(phy, Genus %in% major_group_names[1]))
+  nam[[2]] <- taxa_names(subset_taxa(phy, Genus %in% major_group_names[2]))
+  nam[[3]] <- ophio_asv_names
+  nam[[4]] <- cicada_asv_names
+  nam[[5]] <- taxa_names(subset_taxa(phy, Family %in% c("Mitochondria") &  !taxa_names(phy) %in% c(ophio_asv_names, cicada_asv_names)))
+  nam[[6]] <- taxa_names(subset_taxa(phy, Order %in% major_group_names[6]))
+  nam[[7]] <- taxa_names(subset_taxa(phy, Kingdom %in% major_group_names[7]))
+  nam[[8]] <- taxa_names(subset_taxa(phy, !taxa_names(phy) %in% c(nam[[1]],nam[[2]],nam[[3]],nam[[4]],nam[[5]],nam[[6]],nam[[7]]) & Kingdom %in% "Bacteria"))
+  
+  # Looping over each major group (8 groups) and replacing the Genus-level classification for all ASVs within a group with the group name
+  for(i in 1:8){
+    tax_table(phy)[rownames(tax_table(phy)) %in% nam[[i]], "Genus"] <- major_group_names[i]
+  }
+  
+  # Removing unclassified genera and creating a relative abundance table for all ASVs
+  phy <- subset_taxa(phy, !is.na(Genus))
+  major_table <- rbind(major_table, top_tax(phy, n = length(taxa_names(phy)))[["top_relative"]])
+
+}
+
+# Summing all absolute abundances within each major taxonomic group for each sample. 
+major_table_new <- setNames(aggregate(major_table$abundance, by = list(major_table$sample, major_table$Genus), sum), c("Sample", "Genus", "Relative_Abundance"))
+major_table_new$Sample <- sub("[.]", "-", major_table_new$Sample)
+major_table_new$Sample <- sub("X", "", major_table_new$Sample)
+
+# Order or barplot labels - ordered by dataset, then type, then species - and expanded sample names to be included in plot
+limits <- metadata[order(metadata[,"batch"], metadata[,"type"], metadata[,"species"]), "ID"]
+names <- paste(metadata[order(metadata[,"batch"], metadata[,"type"], metadata[,"species"]), "species"], limits, sep = " ")
+names <- names[limits %in% major_table_new$Sample]
+limits <- limits[limits %in% major_table_new$Sample]
+
+major_plot <- ggplot(major_table_new[major_table_new$Relative_Abundance > 0, ], aes(x = Sample, y = Relative_Abundance, fill = Genus)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = major_groups_colors) +
+  scale_x_discrete(limits = limits, labels = names) +
+  labs(x = "", y = "", fill = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(), 
+        axis.text.y = element_text(size = 3.8), 
+        legend.key.size = unit(0.4, "cm"), 
+        legend.position = "right", 
+        aspect.ratio = 10) +
+  coord_flip()
+
+ggsave("major_taxa.png", major_plot, width = 8, height = 11, units = "in")
+major_plot
+
+```
+
+
+
+#### Fig.S: Abundance vs. prevelence of Genus-level bacterial ASVs  
+```{r}
+
+major_bacterial_families <- c()
+
+abund_prev_plots <- list()
+for(i in 1:3){
+  abund_quantile <- 95
+  prev_quantile <- 95
+  phy <- nzm_filtered2[[i]]
+  tab <- top_tax(phy, n = length(taxa_names(phy)))[["top_relative"]]
+  # Adding relative abundances for each genus-level bacterial taxon 
+  tab_sum <- setNames(aggregate(tab$abundance, by = list(tab$sample, tab$Family, tab$Genus), sum), c("Sample","Family", "Genus", "abundance"))
+  # Calculating mean relative abundance across all samples for non-zero relative abundances 
+  tab_mean <- setNames(aggregate(tab_sum$abundance, by = list(tab_sum$Family, tab_sum$Genus), function(x){ mean(x[x > 0])}), c("Family", "Genus", "abundance"))
+  # Calculating prevelence of each genus-level bacterial taxon across all samples
+  tab_prev <- setNames(aggregate(tab_sum$abundance, by = list(tab_sum$Family, tab_sum$Genus), function(x){ sum(ifelse(x > 0, yes = 1, no = 0)) }), c("Family", "Genus", "prevelance"))
+  # Verifying that abundances and prevelences are matched 
+  tab_prev <- tab_prev[match(tab_mean$Genus, tab_prev$Genus), ]
+  # Making a table combining mean relative abundances and prevelences 
+  tab_new <- data.frame(Family = tab_mean$Family, Genus = tab_mean$Genus, abundance = tab_mean$abundance, prevelance = tab_prev$prevelance)
+  # Finding mean relative abundance and prevelence thresholds for labeling points on a figure 
+  abund <- quantile(tab_new$abundance, probs = seq(0,1,0.01))[abund_quantile]
+  prev <- quantile(tab_new$prevelance, probs = seq(0,1,0.01))[prev_quantile]
+  label_table <- tab_new[tab_new$abundance >  abund | tab_new$prevelance > prev, ]
+  major_bacterial_families <- c(major_bacterial_families, as.character(label_table$Family))
+  abund_prev_plots[[i]] <- ggplot(tab_new, aes(x = prevelance, y = abundance)) +
+    geom_point(size = 1, alpha = 0.5) +
+    labs(y = "Percent Average Abundance", x = "Average Prevelence", title = paste("B", i, sep = "")) +
+    geom_text_repel(label_table, mapping = aes(x = prevelance, y = abundance, label = paste(Family, Genus, sep = ":\n")), size = 1, segment.alpha = 0.2, force = 1) +
+    theme_bw() + 
+    theme(
+      plot.margin = unit(c(1,1,1,1), "mm"), 
+      axis.title.y = element_blank(), 
+      axis.text.y = element_text(size = 8),
+      axis.title.x = element_blank(),
+      axis.text.x = element_text(size = 8),
+      panel.grid.major=element_blank(),
+      panel.grid.minor=element_blank(),
+      legend.position = "none")
+}
+
+abund_prev_plot <- ggarrange(abund_prev_plots[[1]], abund_prev_plots[[2]], abund_prev_plots[[3]], ncol = 3) + theme(plot.margin = unit(c(1,0,0,0), "cm"))
+abund_prev_plot <- annotate_figure(abund_prev_plot,
+                bottom = text_grob("Prevalence", size = 8),
+                left = text_grob("Average non-zero relative abundance", rot = 90, size = 8)) + theme(plot.margin = unit(c(0,0,0,0), "cm"))
+
+ggsave("abund_prev_plot.png",abund_prev_plot, width = 8, height = 5, units = "in")
+abund_prev_plot
+
+```
+
+#### Fig.S: Relative abundance of major bacterial families across all samples (heatmap) 
+```{r}
+
+heatmap_table_expanded <- data.frame()
+for(i in 1:3){
+  phy <- nzm_filtered2[[i]]
+  tab <- top_tax(phy, n = length(taxa_names(phy)))[["top_relative"]]
+  tab$sample_name <- paste(unique(tab$sample), sample_data(phy)$genus, sample_data(phy)$species, sample_data(phy)$type, sep = " ") 
+  # Adding relative abundances for each family-level bacterial taxon 
+  tab_sum <- setNames(aggregate(tab$abundance, by = list(tab$sample_name, tab$Family, tab$Genus), sum), c("Sample", "Family", "Genus", "abundance"))
+  tab_sum$dataset <- rep(paste("Dataset B",i, sep = ""), dim(tab_sum)[1])
+  tab_sum[is.na(tab_sum$abundance), "abundance"] <- 0
+  heatmap_table_expanded <- rbind(heatmap_table_expanded, tab_sum)
+}
+
+heatmap_table_expanded$bact <- paste(heatmap_table_expanded$Family, heatmap_table_expanded$Genus, sep = ":")
+
+bac_order <- setNames(aggregate(heatmap_table_expanded$abundance, by = list(heatmap_table_expanded$bact), sum), c("bact", "abundance"))
+bac_order <- bac_order[order(bac_order$abundance, decreasing = TRUE), ]
+top_genera <- bac_order[1:20, "bact"]
+heatmap_table_expanded <- heatmap_table_expanded[heatmap_table_expanded$bact %in% top_genera, ]
+bac_order <- bac_order[bac_order$bact %in% top_genera, ]
+
+heatmap_table_expanded <- spread(heatmap_table_expanded[, c("Sample", "dataset", "bact", "abundance")], "bact", "abundance")
+#heatmap_table_expanded$Sample <- paste(hclust(dist(heatmap_table_expanded, method = "euclidean"),  method = "ward.D")$order, heatmap_table_expanded$Sample)
+heatmap_table_expanded <- heatmap_table_expanded[hclust(dist(heatmap_table_expanded, method = "euclidean"),  method = "ward.D")$order, ]
+heatmap_table_expanded <- gather(heatmap_table_expanded, "bact", "abundance", 3:dim(heatmap_table_expanded)[2])
+
+heat_table_expanded_plot <- ggplot(heatmap_table_expanded, aes(x= Sample, y=bact)) + 
+  geom_tile(aes(fill=abundance, height = 1, width = 1)) +
+  scale_fill_gradient2(low = "white", high = "black", na.value = "white") +
+  scale_y_discrete(limits = bac_order$bact) +
+  theme_new() + 
+  theme(axis.text.y = element_text(angle = 0, hjust = 1, size = 3), 
+        axis.text.x = element_text(angle = 40, hjust = 1, size = 3), 
+        plot.margin = unit(c(1,1,1,1), "mm"), 
+        panel.border = element_rect(colour = "grey", fill=NA, size=0.5)) +
+  facet_wrap(~dataset, scales = "free", ncol = 3) +
+  coord_flip()
+
+heat_table_expanded_plot
+ggsave("heat_table_expanded_plot.png", heat_table_expanded_plot, height = 11, width = 8, units = "in")
+
+```
+
+
+#### Fig.S: Ordination of all samples using unwighted and weighted UniFrac distances
+```{r}
+
+ordination_all <- list()
+
+for(j in c("unifrac", "wunifrac")){
+  for(i in 1:3){
+    phy <- nzm_filtered2[[i]]
+    phy <- subset_samples(phy, !type %in% c("control", "bacteriome") & !ID %in% c("Jasons") & !genus %in% c("Unknown9"))
+    ord <- ordinate(phy, method = "PCoA", distance = j)
+    ordDF <- data.frame(PC1 = ord$vectors[,1], PC2 = ord$vectors[,2])
+    ordDF$genus <- sample_data(phy)$genus
+    ordDF$species <-  sample_data(phy)$species
+    ordDF$depth <- sample_sums(phy)
+    ordDF$island <- sample_data(phy)$island
+    ordDF$elevation <- sample_data(phy)$elevation
+    ordDF$type <- sample_data(phy)$type
+    ordination_all[[j]][[i]] <- ggplot(ordDF, aes(x = PC1, y = PC2, col = genus, size = depth)) + 
+      geom_point(alpha = 0.8) +
+      xlab(paste("PC1", paste(round(100 * ord$values$Eigenvalues[1]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) +   	
+      ylab(paste("PC2", paste(round(100 * ord$values$Eigenvalues[2]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+      labs(title = paste(paste("Dataset B", i, sep = ""), paste("(", j, ")", sep = ""))) +
+      scale_color_manual(values = genus_colors) +
+      guides(shape = FALSE) +
+      theme_bw() +
+      theme(
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(size = 4),
+        #legend.position = c(0,1),
+        legend.justification = c("left", "top"),
+        legend.background = element_blank(),
+        legend.spacing.x = unit(0.8, 'mm'),
+        legend.spacing.y = unit(0, 'mm'),
+        legend.key.height = unit(3, "mm"),
+        legend.key.size = unit(3, "mm"),
+        legend.text=element_text(size=4),
+        legend.margin = margin(0, 0, 0, 0),
+        legend.title = element_blank())
+  }
+}
+
+pcoa_unmerged_plots <- ggarrange(
+  ggarrange(
+    ordination_all[[1]][[1]],
+    ordination_all[[1]][[2]],
+    ordination_all[[1]][[3]], ncol = 1, legend = "none", align = "hv"), 
+  ggarrange(
+    ordination_all[[2]][[1]],
+    ordination_all[[2]][[2]],
+    ordination_all[[2]][[3]], ncol = 1, align = "hv"), widths = c(0.9,1)
+  )
+
+pcoa_unmerged_plots
+ggsave("pcoa_unmerged_plots.png", pcoa_unmerged_plots, scale = 2)
+
+```
+
+
+
+#### Fig1: Distribution of sample abundances before and after filtering 
+```{r}
+
+librarysize_plots <- lapply(list(nzm, nzm_filtered2), function(dat){
+  df_plot <- data.frame()
+  for(i in 1:3){
+    x <- dat[[i]]
+    df <- as.data.frame(sample_data(x)) 
+    df$LibrarySize <- sample_sums(x)
+    df <- df[!is.na(df$conc) & !is.na(df$LibrarySize), ]
+    df <- df[df$type %in% c("bacteriome", "control", "egg", "gut", "reproductive"), ]
+    df_plot <- rbind(df_plot, data.frame(df))
+    }
+    ggplot(data = df_plot, aes(x = conc, y = log(LibrarySize), col = type)) +
+	    geom_point(alpha = 0.9, size = 1) +
+	    xlab("") +
+	    ylab("") +
+	    labs(col = "Tissue Type") +
+      scale_color_manual(values = tissue_type_colors) +
+	    theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+      facet_wrap(facets = "batch", nrow = 1, ncol = 4, scales = "free_x") + 
+      theme(plot.margin = unit(c(0,2,0,0), "mm"),
+        legend.justification = c("top"),
+        legend.background = element_blank(),
+        legend.spacing.x = unit(0.8, 'mm'),
+        legend.spacing.y = unit(0, 'mm'),
+        legend.key.height = unit(4, "mm"),
+        legend.key.size = unit(4, "mm"),
+        legend.text=element_text(size=6),
+        legend.margin = margin(0, 0, 0, 0),
+        legend.title = element_blank(),
+        axis.text = element_text(size = 7),
+        panel.margin = unit(0, "lines"),
+        strip.background = element_blank())
+  })
+
+libsize <- ggarrange(librarysize_plots[[1]] + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()), librarysize_plots[[2]] +
+                       theme(strip.text.x = element_blank()), common.legend = TRUE, nrow = 2, heights = c(1.1,1), legend = "top")
+
+libsize <- annotate_figure(libsize,
+                bottom = text_grob("Post-PCR DNA Concentration (ng/ul)", size = 8),
+                left = text_grob("log(Total ASV Abundance)", rot = 90, size = 8)) + theme(plot.margin = unit(c(0,0,0,0), "cm"))
+libsize
+
+```
+
+
+#### Fig1, Fig2: Host mitochondrial phylogeny
+```{r}
+
+bind.tip2 <-function(tree,tip.label,edge.length=NULL,where=NULL){
+  if(is.null(where)) where<-length(tree$tip)+1
+  tip<-list(edge=matrix(c(2,1),1,2),
+    tip.label=tip.label,
+    edge.length=edge.length,
+    Nnode=1)
+  class(tip)<-"phylo"
+  obj<-bind.tree(tree,tip,where=where)
+  return(obj)
+}
+
+unloadNamespace("phyloseq")
+library(ggtree, warn.conflicts = FALSE, quietly = TRUE, verbose = FALSE)
+library(phytools)
+library(phylobase)
+
+host_tree <- phytools::reroot(ape::read.tree("../raxml.tre"), node = 70, position = 0.5)
+host_tree <- ape::drop.tip(host_tree, c("Amphipsalta_zelandica", "Kosemia_yezoensis", "Cicadettana_calliope"))
+host_tree <- collapse_nodes(host_tree, threshold = 90)
+host_tree <- bind.tip2(host_tree, tip.label = "septendecim", edge.length = max(host_tree$edge.length), where = 40)
+host_tree <- bind.tip2(host_tree, tip.label = "outgroup", edge.length = max(host_tree$edge.length), where = 41)
+host_tree <- bind.tip2(host_tree, tip.label = "cingulata", edge.length = max(host_tree$edge.length), where = 42)
+host_tree <- bind.tip2(host_tree, tip.label = "strepitans", edge.length = max(host_tree$edge.length), where = 43)
+tip_names <- stringsplit(host_tree$tip.label, "_", 1)
+host_tree$tip.label <- tip_names
+tree_temp = as(host_tree, 'phylo4')
+ggtree(host_tree) + geom_nodelab(mapping = aes(label = node))
+kikihia <- descendants(tree_temp, 45, type = "ALL")
+maoricicada <- descendants(tree_temp, 66, type = "ALL")
+rhodopsalta <- descendants(tree_temp, 64, type = "ALL")
+tree_annotation <- data.frame(
+  node = c(kikihia, maoricicada, rhodopsalta, 40, 41, 42, 43),
+  color = c(
+    rep(genus_colors["Kikihia"], length(kikihia)),
+    rep(genus_colors["Maoricicada"], length(maoricicada)),
+    rep(genus_colors["Rhodopsalta"], length(rhodopsalta)),
+    rep("white", 4))
+  )
+
+tree <- ggtree(host_tree, size = 1) %<+% tree_annotation + aes(color=I(color)) +
+  geom_tiplab(align = TRUE, size = 2, linesize = 0, offset = 0.01, inherit.aes = FALSE) + 
+  ggplot2::xlim(0, 1)
+
+tree
+
+unloadNamespace("ggtree")
+unloadNamespace("phytools")
+library(phyloseq)
+
+tr <- tree +
+  scale_x_continuous(expand=c(0, 0.05, 0.4, 0.12)) +
+  scale_y_tree() +
+   theme(plot.margin = unit(c(1,0,1,0), "mm"), axis.text.x = element_text(size = 1.3))
+
+```
+
+
+#### Fig1: Distribution of major taxonomic groups across host phylogeny
+```{r}
+library(phyloseq)
+major_group_names <- c("Candidatus Sulcia", "Candidatus Hodgkinia", "Ophiocordyceps", "Cicada Mitochondria", "Other Mitochondria", "Chloroplast", "Archaea", "Bacteria")
+
+major_table_by_species <- data.frame()
+for(i in 1:3){
+  phy <- nzm[[i]]
+  nam <- list()
+
+  # Each element in nam list corresponds to ASV names of each of the major groups defined above 
+  nam[[1]] <- taxa_names(subset_taxa(phy, Genus %in% major_group_names[1]))
+  nam[[2]] <- taxa_names(subset_taxa(phy, Genus %in% major_group_names[2]))
+  nam[[3]] <- ophio_asv_names
+  nam[[4]] <- cicada_asv_names
+  nam[[5]] <- taxa_names(subset_taxa(phy, Family %in% c("Mitochondria") &  !taxa_names(phy) %in% c(ophio_asv_names, cicada_asv_names)))
+  nam[[6]] <- taxa_names(subset_taxa(phy, Order %in% major_group_names[6]))
+  nam[[7]] <- taxa_names(subset_taxa(phy, Kingdom %in% major_group_names[7]))
+  nam[[8]] <- taxa_names(subset_taxa(phy, !taxa_names(phy) %in% c(nam[[1]],nam[[2]],nam[[3]],nam[[4]],nam[[5]],nam[[6]],nam[[7]]) & Kingdom %in% "Bacteria"))
+  
+  # Looping over each major group (8 groups) and replacing the Genus-level classification for all ASVs within a group with the group name
+  for(j in 1:8){
+    tax_table(phy)[rownames(tax_table(phy)) %in% nam[[j]], "Genus"] <- major_group_names[j]
+  }
+  
+  # Removing unclassified genera and creating an average relative abundance table for all ASVs within a major taxonomic group within each host species
+  phy <- subset_taxa(phy, !is.na(Genus))
+  phy <- subset_samples(phy, species.tree %in% tip_names & !type %in% "egg")
+  
+  # Getting relative abundances for each ASV per sample
+  table <- top_tax(phy, length(taxa_names(phy)))[["top_relative"]]
+  
+  # Adding relative abundances in each each major taxon per sample
+  table <- setNames(aggregate(table$abundance, by = list(table$sample, table$Genus), sum), c("Sample", "Genus", "Relative_Abundance"))
+  
+  # Calculating the mean relative abundance of each major taxon per species 
+  table$species_name <- sample_data(phy)$species.tree[match(table$Sample, sample_data(phy)$ID)]
+  table$dataset <- rep(i, dim(table)[1])
+  table <- setNames(aggregate(table$Relative_Abundance, by = list(table$species_name, table$Genus, table$dataset), mean), c("Species", "Taxon", "dataset", "Relative_Abundance"))
+  major_table_by_species <- rbind(major_table_by_species, table)
+
+}
+
+major_table_by_species$label <- major_table_by_species$Species
+major_table_by_species$value <- major_table_by_species$Relative_Abundance
+
+tab <- major_table_by_species[major_table_by_species$dataset == 1, ]
+gg1 <- ggtreeplot(tr, tab, aes(y=value, fill = Taxon), flip=TRUE) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = major_groups_colors) +
+  labs(fill = "") +
+  theme_new() +
+  coord_flip() +
+  theme(plot.margin = unit(c(0,0,0,0), "lines"), 
+        axis.line.y = element_line(color="grey", size = 0.5), 
+        axis.line.x = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = c(0.05,0),
+        legend.justification = c("left", "bottom"), 
+        legend.background = element_blank(),
+        #legend.box.background = element_rect(colour = "grey"),
+        legend.spacing.x = unit(0.8, 'mm'),
+        legend.spacing.y = unit(0, 'mm'), 
+        legend.key.height = unit(3, "mm"),
+        legend.key.size = unit(3, "mm"),
+        legend.text=element_text(size=4), 
+        legend.margin = margin(2, 2, 2, 1),
+        legend.title = element_blank())
+
+tab <- major_table_by_species[major_table_by_species$dataset == 2, ]
+gg2 <- ggtreeplot(tr, tab, aes(y=value, fill = Taxon), flip=TRUE) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = major_groups_colors) +
+  theme_new() +
+  coord_flip() +
+  theme(plot.margin = unit(c(0,0,0,0), "lines"), 
+        axis.line.y = element_line(color="grey", size = 0.5), 
+        axis.line.x = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+
+tab <- major_table_by_species[major_table_by_species$dataset == 3, ]
+gg3 <- ggtreeplot(tr, tab, aes(y=value, fill = Taxon), flip=TRUE) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = major_groups_colors) +
+  theme_new() +
+  coord_flip() +
+  theme(plot.margin = unit(c(1.5,0,0,0), "lines"), 
+        axis.line.y = element_line(color="grey", size = 0.5), 
+        axis.line.x = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank()) 
+  
+ggarrange(tr, gg1, gg2, gg3, ncol = 4, align = "hv")
+
+```
+
+#### Fig1: Heatmap of major bacterial groups across host phylogeny
+```{r}
+
+heatmap_table <- data.frame()
+for(i in 1:3){
+  phy <- nzm_filtered2[[i]]
+  phy <- subset_samples(phy, species.tree %in% tip_names)
+  phy <- subset_taxa(phy, Family %in% major_bacterial_families)
+  tab <- top_tax(phy, n = length(taxa_names(phy)))[["top_relative"]]
+  # Adding relative abundances for each family-level bacterial taxon 
+  tab_sum <- setNames(aggregate(tab$abundance, by = list(tab$sample, tab$Family), sum), c("Sample", "Family", "abundance"))
+  # Calculating mean relative abundance across all samples for non-zero relative abundances 
+  tab_sum$species_name <- sample_data(phy)$species.tree[match(tab_sum$Sample, sample_data(phy)$ID)]
+  tab_mean <- setNames(aggregate(tab_sum$abundance, by = list(tab_sum$species_name, tab_sum$Family), function(x){ mean(x[x > 0])}), c("label","Family", "abundance"))
+  tab_mean$dataset <- rep(i, dim(tab_mean)[1])
+  tab_mean[is.na(tab_mean$abundance), "abundance"] <- 0
+  heatmap_table <- rbind(heatmap_table, tab_mean)
+}
+
+heatmap_table <- setNames(aggregate(heatmap_table$abundance, by = list(heatmap_table$label, heatmap_table$Family), mean), c("label", "Family", "abundance"))
+heatmap_table[heatmap_table$Family == "Unknown Family", "Family"] <- "Candidatus Phytoplasma"
+
+column_order <- setNames(aggregate(heatmap_table$abundance, by = list(heatmap_table$Family), sum), c("Family", "abundance"))
+column_order <- column_order[order(column_order$abundance, decreasing = TRUE), ]
+top_families <- column_order[which(column_order$abundance > quantile(column_order$abundance)[3]), "Family"]
+
+heatmap_table <- heatmap_table[heatmap_table$Family %in% top_families, ]
+column_order <- column_order[column_order$Family %in% top_families, ]
+
+heat_table <- ggtreeplot(tr, heatmap_table, aes(x=Family)) + 
+  geom_tile(aes(fill=abundance, height = 1, width = 1)) +
+  scale_fill_gradient2(low = "white", high = major_groups_colors["Bacteria"]) +
+  scale_x_discrete(limits = column_order$Family) +
+  theme_new() + 
+  theme(
+    axis.text.x = element_text(angle = 40, hjust = 1, size = 5), 
+    plot.margin = unit(c(1,0,1,1), "lines"), 
+    panel.border = element_rect(colour = "grey", fill=NA, size=0.5),
+    legend.position = "right",
+    legend.justification = c("right", "top"), 
+    legend.background = element_blank(),
+    legend.spacing.x = unit(1, 'mm'),
+    legend.spacing.y = unit(0, 'mm'), 
+    legend.key.height = unit(3, "mm"),
+    legend.key.size = unit(3, "mm"),
+    legend.text = element_text(size=4), 
+    legend.margin = margin(0, 0, 0, 0),
+    legend.title = element_blank(),
+    axis.text = element_text(size = 7))
+
+ggarrange(tr, heat_table, align = "hv")
+
+```
+
+#### Fig1: Ordination of species-level samples for most abundant bacterial taxa 
+```{r}
+
+ordination_by_species_table <- data.frame()
+for(i in 1:3){
+  phy <- nzm_filtered2[[i]]
+  phy <- subset_samples(phy, species.tree %in% tip_names)
+  phy <- subset_taxa(phy, Family %in% major_bacterial_families)
+  tab <- top_tax(phy, n = length(taxa_names(phy)))[["top_relative"]]
+  # Adding relative abundances for each family-level bacterial taxon 
+  tab_sum <- setNames(aggregate(tab$abundance, by = list(tab$sample, tab$Family, tab$Genus), sum), c("Sample", "Family", "Genus", "abundance"))
+  # Calculating mean relative abundance across all samples for non-zero relative abundances 
+  tab_sum$species_name <- sample_data(phy)$species.tree[match(tab_sum$Sample, sample_data(phy)$ID)]
+  tab_sum$genus <- sample_data(phy)$genus[match(tab_sum$Sample, sample_data(phy)$ID)]
+  tab_mean <- setNames(aggregate(tab_sum$abundance, by = list(tab_sum$genus, tab_sum$species_name, tab_sum$Family), function(x){ mean(x[x > 0])}), c("genus","species","Family", "abundance"))
+  tab_mean$dataset <- rep(i, dim(tab_mean)[1])
+  tab_mean <- tab_mean[!is.na(tab_mean$abundance) & tab_mean$abundance != 0, ]
+  ordination_by_species_table <- rbind(ordination_by_species_table, tab_mean)
+}
+
+ordination_by_species_table <- spread(ordination_by_species_table, key = Family, value = abundance)
+rownames(ordination_by_species_table) <- paste(ordination_by_species_table$genus, ordination_by_species_table$species, ordination_by_species_table$dataset, sep = "_")
+
+ordination_by_species_table <- as.matrix(ordination_by_species_table[, 4:dim(ordination_by_species_table)[2]])
+ordination_by_species_table[is.na(ordination_by_species_table)] <- 0
+ord <- ordinate(otu_table(ordination_by_species_table, taxa_are_rows = FALSE), method = "PCoA", distance = "bray")
+ordDF <- data.frame(PC1 = ord$vectors[,1], PC2 = ord$vectors[,2])
+ordDF$genus <- stringsplit(rownames(ordDF), "_", 1)
+ordDF$species <- stringsplit(rownames(ordDF), "_", 2)
+ordDF$dataset <- paste("B", stringsplit(rownames(ordDF), "_", 3), sep = "")
+
+dis <- vegdist(ordination_by_species_table, method='bray')
+set.seed(1)
+permanova <- adonis2(dis ~ dataset + genus + species, data = ordDF, permutations = 9999, method="bray")
+
+ord_plot <- ggplot(ordDF, aes(x = PC1, y = PC2, shape = dataset, col = genus)) + 
+  geom_point(alpha = 0.8, size = 2) +
+	xlab(paste("PC1", paste(round(100 * ord$values$Eigenvalues[1]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) +   	
+  ylab(paste("PC2", paste(round(100 * ord$values$Eigenvalues[2]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+  scale_color_manual(values = genus_colors) +
+  scale_shape_manual(values = dataset_shapes) +
+  guides(shape = FALSE) +
+  annotate("text", x = 0.15, y = -0.5, size = 2, label = "Dataset (R2 = 0.17)*** \n Host Genus (NS) \n Host Species (NS)") +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    legend.position = c(1,0),
+    legend.justification = c("right", "bottom"), 
+    legend.background = element_blank(),
+    legend.box.background = element_rect(colour = "grey"),
+    legend.spacing.x = unit(0.8, 'mm'),
+    legend.spacing.y = unit(0, 'mm'), 
+    legend.key.height = unit(3, "mm"),
+    legend.key.size = unit(3, "mm"),
+    legend.text = element_text(size=4), 
+    legend.margin = margin(2, 2, 2, 1),
+    legend.title = element_blank(),
+    axis.text = element_text(size = 7))
+  
+ord_plot
+
+```
+
+
+#### Fig1: Final figure layout 
+
+```{r}
+
+fig1 <- ggarrange(
+  ggarrange(tr, gg1, gg2, gg3, heat_table, align = "hv", ncol = 5, widths = c(1.5, 0.6, 0.6, 0.6, 3), labels = c(" ", "A", "B", "C", "D")),
+  ggarrange(libsize, ord_plot, ncol = 2, labels = c("E", "F")), nrow = 2, heights = c(1.5,1), hjust = 1, vjust = 3) +
+  theme(aspect.ratio = 1, plot.margin = unit(c(2,2,2,2), "mm"))
+
+ggsave("fig1.png", fig1, scale = 1)
+fig1
+
+```
+
+
+
+
+#### Fig2: Ordination of Ophiocordyceps 16s ASVs and Matsuura et al. (2018) 16s sequences 
+
+```{r}
+unloadNamespace("phyloseq")
+library(adegenet)
+library(ape)
+matsuura_names <- c("Terpnosia vacua (SRR7014895)", "Meimuna iwasakii (SRR7014891)", "Graptopsaltria nigrofuscata (SRR7014886)", "Hyalessa maculaticollis (SRR7014883)", "Meimuna opalifera (SRR6427068)", "Meimuna oshimensis (SRR7014901)", "Graptopsaltria bimaculata (SRR7014885)")
+
+snps <- fasta2DNAbin("../newophio9_aligned.fasta", snpOnly = T)
+pca <- prcomp(dist.dna(snps, model = "N"), scale=T)
+pca_tab <- data.frame(pca$x[,1:2], names = rownames(pca$x))
+
+pca_tab$cluster <- c()
+pca_tab[pca_tab$PC1 < 30 & pca_tab$PC2 < -4, "cluster"] <- "Ophiocordyceps ASV Cluster 1"
+pca_tab[pca_tab$PC1 < 30 & pca_tab$PC2 > -4 & pca_tab$PC2 < 4, "cluster"] <- "Ophiocordyceps ASV Cluster 2"
+pca_tab[pca_tab$PC1 < 30 & pca_tab$PC2 > 4, "cluster"] <- "Ophiocordyceps ASV Cluster 3"
+
+cluster_pca_plot <- ggplot(pca_tab, aes(x = PC1, y = PC2)) +
+  geom_point(pca_tab[!pca_tab$names %in% c(matsuura_names, "Ophiocordyceps sinensis (NC_034659.1)"), ], mapping = aes(x = PC1, y = PC2, col = cluster), size = 2, alpha = 0.8, inherit.aes = FALSE) +
+  geom_point(pca_tab[pca_tab$names %in% c(matsuura_names, "Ophiocordyceps sinensis (NC_034659.1)"), ], mapping = aes(x = PC1, y = PC2), col = "black", size = 2, alpha = 0.8, inherit.aes = FALSE) +
+  geom_text_repel(pca_tab[pca_tab$names %in% c(matsuura_names, "Ophiocordyceps sinensis (NC_034659.1)"), ], mapping = aes(x = PC1, y = PC2, label = names), size = 2, inherit.aes = FALSE, nudge_x = 40, nudge_y = 4, segment.alpha = 0.2, box.padding = 0.1) +
+  scale_color_brewer(palette = "Paired") +
+  labs(col = "") +
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+cluster_pca_plot
+
+unloadNamespace("treeio")
+unloadNamespace("phytools")
+unloadNamespace("phangorn")
+unloadNamespace("tidytree")
+unloadNamespace("adegenet")
+library(phyloseq)
+
+```
+
+#### Data Processing: Ophiocordyceps 16s ASV relative abundances, Ophiocordyceps ASV clusters, host species elevation, and host species tree
+```{r}
+
+library(phyloseq)
+cluster_names <-c("Ophiocordyceps ASV Cluster 1", "Ophiocordyceps ASV Cluster 2", "Ophiocordyceps ASV Cluster 3")
+
+
+ophio_cluster <- data.frame()
+for(k in 1:3){
+  phy <- nzm[[k]]
+
+  for(j in 1:3){
+    tax_table(phy)[rownames(tax_table(phy)) %in% stringsplit(pca_tab$names[pca_tab$cluster %in% cluster_names[j]], "_", 2), "Genus"] <- cluster_names[j]
+  }
+  
+  phy <- subset_samples(phy, !species %in% "Unknown9" & !sample_sums(phy) == 0 & !is.na(sample_sums(phy)))
+  table <- top_tax(phy, length(taxa_names(phy)))[["top_absolute"]]
+  table$species_name <- sample_data(phy)$species.tree[match(table$sample, sample_data(phy)$ID)]
+  table <- setNames(aggregate(table$abundance, by = list(table$species_name, table$Genus), mean), c("label", "Taxon", "value"))
+  ophio_cluster <- rbind(ophio_cluster, table)
+
+}
+
+ophio_cluster$ophio <- ophio_cluster$Taxon %in% cluster_names
+
+ophio_cluster_relative <- setNames(aggregate(ophio_cluster$value, by = list(ophio_cluster$label, ophio_cluster$ophio), sum), c("label", "ophio", "value"))
+ophio_cluster_relative <- spread(ophio_cluster_relative, key = ophio, value = value)
+ophio_cluster_relative$relative <- ophio_cluster_relative[,3] / (ophio_cluster_relative[,2] + ophio_cluster_relative[,3])
+
+ophio_cluster_max <- ophio_cluster[ophio_cluster$Taxon %in% cluster_names, ]
+ophio_cluster_max <- setNames(aggregate(paste(ophio_cluster_max$Taxon, ophio_cluster_max$value, sep = "_"), by = list(ophio_cluster_max$label), function(x){ stringsplit(x, "_", 1)[as.numeric(stringsplit(x, "_", 2)) == max(as.numeric(stringsplit(x, "_", 2)))]}), c("label", "Taxon"))
+ophio_cluster_max$Taxon <- unlist(lapply(ophio_cluster_max$Taxon, function(x){ if(length(x) == 1){ return(x) } else { return("NA") } }))
+ophio_cluster_max$value <- rep(1, dim(ophio_cluster_max)[1])
+ophio_cluster_max <- ophio_cluster_max[ophio_cluster_max$Taxon != "NA", ]
+ophio_cluster_max <- ophio_cluster_max[!ophio_cluster_max$label %in% ophio_cluster_relative[ophio_cluster_relative$relative <= 0.01, "label"], ]
+
+sam_data <- c()
+for(k in 1:3){
+  phy <- nzm[[k]]
+  sam_data <- rbind(sam_data, sample_data(phy)[sample_data(phy)$species.tree %in% ophio_cluster_max$label, c("elevation", "species.tree")])
+}
+sam_data <- setNames(aggregate(sam_data$elevation, by = list(sam_data$species.tree), function(x){mean(x, na.rm = TRUE)}), c("label", "value"))
+sam_data$position <- rep(1, dim(sam_data)[1])
+
+tr_ophio <- tree +
+  scale_x_continuous(expand=c(0, 0, 0, 0.15)) +
+  scale_y_tree() +
+   theme(plot.margin = unit(c(1,0,1,0), "mm"))
+
+
+# plots
+
+gg0_ophio <- ggtreeplot(tr, ophio_cluster_relative, aes(y = relative), flip=TRUE) +
+  geom_bar(stat = "identity", position = "stack") +
+  theme_new() +
+  coord_flip() +
+  theme(plot.margin = unit(c(0,0,0,0), "lines"), 
+        axis.line.y = element_line(color="grey", size = 0.5), 
+        axis.line.x = element_blank())
+
+
+gg1_ophio <- ggtreeplot(tr, ophio_cluster_max, aes(y=value, fill = Taxon), flip=TRUE) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_brewer(palette = "Paired") +
+  theme_new() +
+  coord_flip() +
+  theme(plot.margin = unit(c(0,0,0,0), "lines"), 
+        axis.line.y = element_line(color="grey", size = 0.5), 
+        axis.line.x = element_blank())
+
+gg3_ophio <- ggtreeplot(tr, sam_data, aes(y=1, fill = value), flip=TRUE) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_gradient2(low = "white", high = "red") +
+  scale_x_discrete(limits = 1) +
+  theme_new() +
+  coord_flip() +
+  theme(plot.margin = unit(c(0,0,0,0), "lines"), 
+        axis.line.y = element_line(color="grey", size = 0.5), 
+        axis.line.x = element_blank())
+
+```
+
+#### Fig2: Relative proportion of Ophiocordyceps ASVs to all ASVs across host phylogeny
+```{r}
+
+gg0_ophio <- ggtreeplot(tr, ophio_cluster_relative, aes(y = relative), flip=TRUE) +
+  geom_bar(stat = "identity", position = "stack") +
+  theme_new() +
+  coord_flip() +
+  theme(plot.margin = unit(c(0,0,0,0), "lines"), axis.line.y = element_line(color="grey", size = 0.5), axis.line.x = element_line(color="grey", size = 0.5))
+
+ggarrange(tr_ophio, gg0_ophio, align = "hv")
+
+```
+
+#### Fig2: Distribution of Ophiocordyceps ASV clusters across host phylogeny 
+
+```{r}
+
+gg1_ophio <- ggtreeplot(tr, ophio_cluster_max, aes(y=value, fill = Taxon), flip=TRUE) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_brewer(palette = "Paired") +
+  theme_new() +
+  coord_flip() +
+  theme(plot.margin = unit(c(0,0,0,0), "lines"), axis.line.y = element_line(color="grey", size = 0.5), axis.line.x = element_line(color="grey", size = 0.5))
+
+ggarrange(tr_ophio, gg1_ophio, align = "hv")
+
+```
+
+#### Fig2: Average elevation sampled across host phylogeny  
+
+```{r}
+
+gg3_ophio <- ggtreeplot(tr, sam_data, aes(y=1, fill = value), flip=TRUE) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_gradient2(low = "white", high = "red") +
+  scale_x_discrete(limits = 1) +
+  labs(fill = "Elevation (m)") +
+  theme_new() +
+  coord_flip() +
+  theme(plot.margin = unit(c(0,0,0,0), "lines"), 
+        axis.line.y = element_line(color="grey", size = 0.5), 
+        axis.line.x = element_line(color="grey", size = 0.5))
+
+gg3_legend <- ggplot(sam_data, aes(label, fill = value)) +
+  geom_bar() +
+  labs(fill = "Elevation (m)") +
+  scale_fill_gradient2(low = "white", high = "red")
+
+gg3_legend <- as_ggplot(ggpubr::get_legend(gg3_legend))
+
+ggarrange(tr_ophio, gg3_ophio, align = "hv")
+
+```
+
+
+#### Fig2: Final figure layout
+
+```{r}
+
+ophio_cluster_plot <- ggarrange(
+  ggarrange(tr_ophio, gg0_ophio, gg1_ophio, gg3_ophio, ncol = 4, align = "hv", widths = c(1,0.1,0.1, 0.05)), NULL,  
+  ggarrange(cluster_pca_plot + theme(legend.position = "none", aspect.ratio = 1, legend.key.size = unit(0.5, "cm"), legend.direction = "vertical"), 
+            ggarrange(gg3_legend, ncol = 2), nrow =2, heights = c(3,1)), ncol = 3, widths = c(0.475, 0.05, 0.475), labels = c("A", " ", "B"), hjust = -1.5, vjust = 2) + theme(plot.margin = margin(c(10,10,10,10), "cm"), aspect.ratio = 0.8)
+
+ggsave("Fig2_ophio_cluster_plot.png", ophio_cluster_plot, scale = 1, dpi = "retina")
+ophio_cluster_plot
+
+```
+Distribution of Ophiocordyceps ASV clusters across host phylogeny 
+
+
+#### Map of localities 
+```{r}
+
+library(sf)
+library(units)
+library(tmap)
+library(tmaptools)
+library(OpenStreetMap)
+library(raster)
+library(ggmap)
+
+metadata <- rbind(b1_metadata, b2_metadata, b3_metadata)
+metadata <- metadata[!is.na(metadata$lon) & !is.na(metadata$lat), ]
+metadata$code2 <- paste(stringsplit(metadata$code, "[.]", 3), stringsplit(metadata$code, "[.]", 4), sep = ".")
+metadata <- data.frame(unique(paste(metadata$lat_sign, metadata$lon_sign, metadata$code2)))
+metadata$lat_sign = as.numeric(stringsplit(metadata[,1], " ", 1))
+metadata$lon_sign = as.numeric(stringsplit(metadata[,1], " ", 2))
+metadata$code2 = stringsplit(metadata[,1], " ", 3)
+
+labels <- data.frame(labels = unique(paste(metadata$lat_sign, metadata$lon_sign, metadata$code2)))
+labels$lat_sign <- as.numeric(stringsplit(labels$labels, " ", 1))
+labels$lon_sign <- as.numeric(stringsplit(labels$labels, " ", 2))
+labels$code2 <- stringsplit(labels$labels, " ", 3)
+
+dim(metadata)
+dim(labels)
+length(unique(metadata$code2))
+
+contours = st_read(dsn = "../lds-nz-contours-topo-1500k-SHP", layer = 'nz-contours-topo-1500k')
+data("World")
+World <-  st_transform(World, CRS("+init=epsg:4326") )
+nz <- World[World$sovereignt == "New Zealand", ]
+
+bbox <- st_bbox(nz)
+names(bbox) <- c("left", "bottom", "right", "top")
+bbox <- bbox + c(-1,-1,1,1)
+nz_map <- get_stamenmap(bbox = bbox, zoom = 7, maptype = "terrain-background")
+
+map <- ggmap(nz_map) +
+  geom_point(metadata, mapping = aes(x = lon_sign, y = lat_sign), size = 0.5) +
+  geom_text_repel(metadata, mapping = aes(x = lon_sign, y = lat_sign, label = code2), size = 1.7, force = 5, segment.alpha = 0.5, segment.size = 0.2) +
+  theme_new() +
+  theme(aspect.ratio = 1.5)
+
+ggsave("map.png", map)
+
+map
+
+```
+
+
+
+#### Data Processing: Unmerged samples, merged samples by species, and merged by species/subsetted samples  
+```{r}
+unmerged_species <- list()
+for(i in 1:3){
+  phy <- nzm_filtered2[[i]]
+  phy <- subset_samples(phy, type %in% "gut")
+  phy <- subset_samples(phy, !is.na(species.tree))
+  phy <- transform_sample_counts(phy, function(x){ x/sum(x) })
+  unmerged_species[[i]] <- phy
+}
+
+merged_species <- list()
+for(i in 1:3){
+  phy <- nzm_filtered2[[i]]
+  phy <- subset_samples(phy, type %in% "gut")
+  phy <- subset_samples(phy, !is.na(species.tree))
+  phy <- transform_sample_counts(phy, function(x){ x/sum(x) })
+  species_names <- unique(as.character(sample_data(phy)[,"species.tree"]$species.tree))
+  new_otu <- data.frame(row.names = taxa_names(phy))
+  new_sample_data <- data.frame(row.names = species_names)
+  for(j in 1:length(species_names)){
+    phy_individuals <- otu_table(phy)[, which(sample_data(phy)[, "species.tree"]$species.tree %in% species_names[j])]
+    new_otu <- cbind(new_otu, data.frame(x = apply(otu_table(phy_individuals), 1, mean)))
+    sample_data_individuals <- data.frame(sample_data(phy)[which(sample_data(phy)[, "species.tree"]$species.tree %in% species_names[j]),])
+    new_sample_data <- rbind(new_sample_data, data.frame(species.tree = species_names[j], elevation = mean(sample_data_individuals$elevation), genus = sample_data_individuals[1, "genus"], habitat = sample_data_individuals[1, "habitat"]))
+  }
+  colnames(new_otu) <- species_names
+  rownames(new_sample_data) <- new_sample_data$species.tree
+  merged_species[[i]] <- phyloseq(otu_table(new_otu, taxa_are_rows = TRUE), sample_data(new_sample_data), phy_tree(phy), tax_table(phy))
+  
+}
+
+mean_control_threshold <- mean(c(sample_sums(subset_samples(nzm_filtered2[[2]], type %in% "control")), sample_sums(subset_samples(nzm_filtered2[[3]], type %in% "control"))))
+
+merged_species_subset <- list()
+for(i in 1:3){
+  phy <- nzm_filtered2[[i]]
+  phy <- subset_samples(phy, sample_sums(phy) >= mean_control_threshold)
+  phy <- subset_samples(phy, type %in% "gut")
+  phy <- subset_samples(phy, !is.na(species.tree))
+  phy <- transform_sample_counts(phy, function(x){ x/sum(x) })
+  species_names <- unique(as.character(sample_data(phy)[,"species.tree"]$species.tree))
+  new_otu <- data.frame(row.names = taxa_names(phy))
+  new_sample_data <- data.frame(row.names = species_names)
+  for(j in 1:length(species_names)){
+    phy_individuals <- otu_table(phy)[, which(sample_data(phy)[, "species.tree"]$species.tree %in% species_names[j])]
+    new_otu <- cbind(new_otu, data.frame(x = apply(otu_table(phy_individuals), 1, mean)))
+    sample_data_individuals <- data.frame(sample_data(phy)[which(sample_data(phy)[, "species.tree"]$species.tree %in% species_names[j]),])
+    new_sample_data <- rbind(new_sample_data, data.frame(species.tree = species_names[j], elevation = mean(sample_data_individuals$elevation), genus = sample_data_individuals[1, "genus"], habitat = sample_data_individuals[1, "habitat"]))
+  }
+  colnames(new_otu) <- species_names
+  rownames(new_sample_data) <- new_sample_data$species.tree
+  merged_species_subset[[i]] <- phyloseq(otu_table(new_otu, taxa_are_rows = TRUE), sample_data(new_sample_data), phy_tree(phy), tax_table(phy))
+  
+}
+
+coph <- cophenetic(host_tree)
+coph[lower.tri(coph, diag = TRUE)] <- "diag"
+coph <- data.frame(coph, speciesID = rownames(coph), check.rows = FALSE, check.names = FALSE, fix.empty.names = FALSE, stringsAsFactors = FALSE)
+coph <- gather(coph, key = speciesid, value = coph, 1:(dim(coph)[2]-1))
+coph <- coph[!coph$coph %in% "diag", ]
+
+```
+Merges samples within a species so that the relative abundance value of each ASV within each species is the average value across individuals within that species.
+  
+#### Data Processing: Pairwise distance tables (unifrac and weighted unifrac) using unmerged, merged, and merged/subsetted datasets  
+```{r}
+
+# Multi-level list containing pairwise comparisons
+# Level 1 (h), distance type: unifrac, wunifrac
+# Level 2 (k), dataset type: merged by species, merged by species and subsetted for highest total bacterial abundance, unmerged/un-subsetted 
+# Level 3 (j), dataset: B1, B2, B3
+
+pairwise_tables <- list()
+for(h in c("unifrac", "wunifrac")){
+  distance_table <- list()
+  for(k in c("merged_species", "merged_species_subset", "unmerged_species")){
+    temp_table <- list()
+    for(j in 1:3){
+      phy_list <- get(k)
+      phy <- phy_list[[j]]
+      sam <- data.frame(sample_data(phy))
+      sam[sam$species.tree == "muta-NI", "species.tree"] <- "muta-SI" 
+      
+      dismat <- phyloseq::distance(phy, method = h, type = "samples")
+      dismat <- as.matrix(dismat)
+      dismat[lower.tri(dismat, diag = TRUE)] <- "diag"
+      
+      colnames(dismat) <- rownames(dismat) <- paste(paste(sam$SampleID, sam$species.tree, sep = "/"), sam$elevation, sam$habitat, sam$genus, sam$habitat, sam$process_date, sep = "_")
+      tab <- data.frame(cbind(dismat, ID = rownames(dismat)), check.rows = FALSE, check.names = FALSE, fix.empty.names = FALSE, stringsAsFactors = FALSE)
+      dis <- gather(tab, key = id, value = pdis, 1:dim(sam)[1])
+      dis <- dis[!dis$pdis %in% "diag", ]
+      dis$pdis <- as.numeric(dis$pdis)
+      
+      dis$elev_diff <- abs(as.numeric(stringsplit(dis$ID, "_", 2)) - as.numeric(stringsplit(dis$id, "_", 2)))
+      dis$habitat_diff <- ifelse(!stringsplit(dis$ID, "_", 3) == stringsplit(dis$id, "_", 3), yes = "different_habitat", no = "same_habitat")
+      dis$habitat_diff <- factor(as.character(dis$habitat_diff), levels=c("same_habitat", "different_habitat"))
+      dis$genus_diff <- ifelse(!stringsplit(dis$ID, "_", 4) == stringsplit(dis$id, "_", 4), yes = "different_genera", no = "same_genus")
+      dis$speciesID <- stringsplit(dis$ID, "_", 1)
+      dis$speciesid <- stringsplit(dis$id, "_", 1)
+      dis$habitatID <- stringsplit(dis$ID, "_", 5)
+      dis$habitatid <- stringsplit(dis$id, "_", 5)
+      dis$process_dateID <- stringsplit(dis$ID, "_", 6)
+      dis$process_dateid <- stringsplit(dis$id, "_", 6)
+
+      genus_order <- order(unique(sam$genus))
+      names(genus_order) <- unique(sam$genus)
+      
+      temp_gen <- c()
+      for(i in 1:dim(dis)[1]) { 
+        
+        a <- stringsplit(dis$ID[i], "_", 4)
+        b <- stringsplit(dis$id[i], "_", 4)
+        
+        if(a == b) {
+          temp_gen <- c(temp_gen, a)
+        } else { 
+          temp <- c(genus_order[names(genus_order) == a], genus_order[names(genus_order) == b])
+          temp <- temp[order(temp)]
+          a <- paste(names(temp[1]), names(temp[2]), sep = " / ")
+          temp_gen <- c(temp_gen, a)
+        }
+      }
+      
+      temp_hybrid <- c()
+      for(i in 1:dim(dis)[1]) { 
+        
+        a <- grepl(dis$speciesID[i], pattern = "hybrid")
+        b <- grepl(dis$speciesid[i], pattern = "hybrid")
+        
+        if(a == TRUE & b == TRUE) {
+          temp_hybrid <- c(temp_hybrid, "hybrid/hybrid")
+        } else if ((a != TRUE & b == TRUE) | (a == TRUE & b != TRUE)){
+          temp_hybrid <- c(temp_hybrid, "parent/hybrid")
+        } else if (a != TRUE & b != TRUE){
+          temp_hybrid <- c(temp_hybrid, "parent/parent")
+        }
+      }
+      
+      temp_processing_date <- c()
+      for(i in 1:dim(dis)[1]) { 
+        
+        a <- stringsplit(dis$ID[i], "_", 6)
+        b <- stringsplit(dis$id[i], "_", 6)
+        
+        if(a == b) {
+          temp_processing_date <- c(temp_processing_date, "same_processing_dates")
+        } else { 
+          temp_processing_date <- c(temp_processing_date, "diff_processing_dates")
+        }
+      }
+      
+      dis$genus_comparison <- temp_gen
+      dis$hybrid_comparison <- temp_hybrid
+      dis$processing_date <- temp_processing_date
+      
+      copho_vec <- c()
+      
+      for(z in 1:dim(dis)[1]){
+        a <- coph[(coph$speciesID == stringsplit(dis[z, "speciesID"], "/", 2) & coph$speciesid == stringsplit(dis[z, "speciesid"], "/", 2)) | 
+                    (coph$speciesid == stringsplit(dis[z, "speciesID"], "/", 2) & coph$speciesID == stringsplit(dis[z, "speciesid"], "/", 2)),]
+        if(dim(a)[1] > 0) {
+          copho_vec <- c(copho_vec, a$coph)
+        } else (
+          copho_vec <- c(copho_vec, "NA")
+        )
+      }
+      
+      dis$copho <- copho_vec
+      dis[dis$hybrid_comparison %in% "hybrid/hybrid", "copho"] <- "hybrids"
+      dis <- dis[!dis$copho %in% "NA", ]
+      dis$copho <- as.numeric(dis$copho)
+      dis <- dis[dis$pdis > 0 & dis$pdis < 1,]
+      
+      dis <- dis[!grepl(dis$speciesID, pattern = "septendecim"), ] 
+      dis <- dis[!grepl(dis$speciesID, pattern = "outgroup"), ]
+      dis <- dis[dis$genus_diff == "same_genus", ]
+      
+      temp_table[[j]] <- dis
+      
+    }
+    
+    distance_table[[k]] <- temp_table
+  
+  }
+  
+  pairwise_tables[[h]] <- distance_table
+  
+}
+
+```
+Table of pairwise distances for each of the three datasets (B1, B2, B3) for all samples (unmerged species) and species (merged species).
+
+#### Fig3. Cophenetic distance and elevation vs. pairwise distances (full dataset merged by species)
+
+```{r}
+
+# unweighted UniFrac
+tab1 <- pairwise_tables[[1]][[1]][[2]]
+tab1$set <- rep("unifrac_B2", dim(tab1)[1])
+tab2 <- pairwise_tables[[1]][[1]][[3]]
+tab2$set <- rep("unifrac_B3", dim(tab2)[1])
+
+# weighted UniFrac
+tab3 <- pairwise_tables[[2]][[1]][[2]]
+tab3$set <- rep("wunifrac_B2", dim(tab3)[1])
+tab4 <- pairwise_tables[[2]][[1]][[3]]
+tab4$set <- rep("wunifrac_B3", dim(tab4)[1])
+
+tab <- rbind(tab1, tab2, tab3, tab4)
+colnames(tab)
+
+gg1_distance <- ggplot(tab, aes(x = elev_diff, y = pdis, col = set)) +
+  geom_point(size = 0.1) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Difference in elevation (m)", y = "Bacterial Community Distance", col = "") +
+  theme_bw() +
+  theme(panel.grid = element_blank())
+
+gg2_distance <- ggplot(tab, aes(x = copho, y = pdis, col = set)) +
+  geom_point(size = 0.1) +
+  geom_smooth(method = "lm", se = FALSE, alpha = 0.5) +
+  labs(x = "Phylogenetic (Cophenetic) Distance", y = "Bacterial Community Distance", col = "") +
+  theme_bw() +
+  theme(panel.grid = element_blank())
+
+ggarrange(gg1_distance, gg2_distance, common.legend = TRUE)
+
+```
+
+
+#### FigS. Cophenetic distance and elevation vs. pairwise distances (Reduced dataset merged by species and unmwerged dataset)
+```{r}
+
+# unweighted UniFrac, reduced/merged by host species  
+tab1 <- pairwise_tables[[1]][[2]][[2]]
+tab1$set <- rep("unifrac_B2_merged/reduced", dim(tab1)[1])
+tab2 <- pairwise_tables[[1]][[2]][[3]]
+tab2$set <- rep("unifrac_B3_merged/reduced", dim(tab2)[1])
+
+# weighted UniFrac, reduced/merged by host species   
+tab3 <- pairwise_tables[[2]][[2]][[2]]
+tab3$set <- rep("wunifrac_B2_merged/reduced", dim(tab3)[1])
+tab4 <- pairwise_tables[[2]][[2]][[3]]
+tab4$set <- rep("wunifrac_B3_merged/reduced", dim(tab4)[1])
+
+# unweighted UniFrac, unmerged
+tab5 <- pairwise_tables[[1]][[3]][[2]]
+tab5$set <- rep("unifrac_B2_unmerged/full", dim(tab5)[1])
+tab6 <- pairwise_tables[[1]][[3]][[3]]
+tab6$set <- rep("unifrac_B3_unmerged/full", dim(tab6)[1])
+
+# weighted UniFrac, unmerged 
+tab7 <- pairwise_tables[[2]][[3]][[2]]
+tab7$set <- rep("wunifrac_B2_unmerged/full", dim(tab7)[1])
+tab8 <- pairwise_tables[[2]][[3]][[3]]
+tab8$set <- rep("wunifrac_B3_unmerged/full", dim(tab8)[1])
+
+
+tab <- rbind(tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8)
+tab$dataset_type <- stringsplit(tab$set, "_", 3)
+tab$set2 <- paste(stringsplit(tab$set, "_", 1), stringsplit(tab$set, "_", 2), sep = "_")
+
+gg1_distance_sup <- ggplot(tab, aes(x = elev_diff, y = pdis, col = set2)) +
+  geom_point(size = 0.5, alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Difference in elevation (m)", y = "Bacterial Community Distance", col = "") +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  facet_wrap(~dataset_type)
+
+gg2_distance_sup <- ggplot(tab, aes(x = copho, y = pdis, col = set2)) +
+  geom_point(size = 0.5, alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Phylogenetic (Cophenetic) Distance", y = "Bacterial Community Distance", col = "") +
+  theme_bw() +
+  facet_wrap(~dataset_type) +
+  theme(panel.grid = element_blank())
+
+gg_distance_sup <- ggarrange(gg1_distance_sup, gg2_distance_sup, ncol = 1, nrow = 2, common.legend = TRUE)
+
+ggsave("gg_distance_sup.png", gg_distance_sup)
+
+gg_distance_sup
+
+```
+
+#### Fig3. Habitat differences 
+
+```{r}
+
+habitat_correlate_plots <- list()
+for(i in 1:2){
+  table <- pairwise_tables[[i]][[3]][[2]]
+  table <- table[table$habitatID != "NA" & table$habitatid != "NA", ]
+  table <- table[, c("habitatID", "habitatid", "pdis")]
+  table <- setNames(aggregate(table$pdis, by = list(table$habitatID, table$habitatid), mean), c("habitatID", "habitatid", "pdis"))
+  table <- spread(table, key = habitatid, value = pdis)
+  table <- as.matrix(table[, -1])
+  table[upper.tri(table)] <- (table[upper.tri(table)] + table[lower.tri(table)])/2
+  table[lower.tri(table)] <- NA
+  table <- data.frame(table, habitatid = colnames(table))
+  table <- gather(table, key = habitatID, value = pdis, 1:(dim(table)[2]-1))
+  habitat_correlate_plots[[i]] <- ggplot(table, aes(x = habitatID, y = habitatid)) +
+    geom_tile(aes(fill=pdis, height = 1, width = 1)) +
+    scale_fill_gradient(low = "grey95", high = "#FF825F", na.value = NA) +
+    labs(title = c("Unweighted UniFrac", "Weighted UniFrac")[i], fill = "Average \nBacterial \nCommunity \nDistance") +
+    theme_minimal() +
+    theme(panel.border = element_rect(colour = "black", fill = NA), 
+          axis.title = element_blank(), 
+          plot.title = element_text(size=8), 
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          legend.justification = c("right", "top"), 
+          legend.background = element_blank(),
+          legend.spacing.x = unit(0.8, 'mm'),
+          legend.spacing.y = unit(0, 'mm'), 
+          legend.key.height = unit(3, "mm"),
+          legend.key.size = unit(3, "mm"),
+          legend.text = element_text(size=4), 
+          legend.margin = margin(2, 2, 2, 1),
+          legend.title = element_blank()) 
+}
+
+ggarrange(habitat_correlate_plots[[1]], habitat_correlate_plots[[2]], ncol = 1, nrow = 2)
+
+```
+
+#### FigS. Habitat differences B4 dataset only
+```{r}
+
+
+habitat_correlate_plots_b4 <- list()
+for(i in 1:2){
+  table <- pairwise_tables[[i]][[3]][[3]]
+  table <- table[table$habitatID != "NA" & table$habitatid != "NA", ]
+  table <- table[, c("habitatID", "habitatid", "pdis")]
+  table <- setNames(aggregate(table$pdis, by = list(table$habitatID, table$habitatid), mean), c("habitatID", "habitatid", "pdis"))
+  table <- spread(table, key = habitatid, value = pdis)
+  table <- as.matrix(table[, -1])
+  table[upper.tri(table)] <- (table[upper.tri(table)] + table[lower.tri(table)])/2
+  table[lower.tri(table)] <- NA
+  table <- data.frame(table, habitatid = colnames(table))
+  table <- gather(table, key = habitatID, value = pdis, 1:(dim(table)[2]-1))
+  habitat_correlate_plots_b4[[i]] <- ggplot(table, aes(x = habitatID, y = habitatid)) +
+    geom_tile(aes(fill=pdis, height = 1, width = 1)) +
+    scale_y_discrete(position = "right") +
+    scale_fill_gradient(low = "grey95", high = "#FF825F", na.value = NA) +
+    labs(title = c("Unweighted UniFrac", "Weighted UniFrac")[i], fill = "Average \nBacterial \nCommunity \nDistance") +
+    theme_minimal() +
+    theme(panel.border = element_rect(colour = "black", fill = NA), 
+          axis.title = element_blank(), 
+          plot.title = element_text(size=8), 
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank()) 
+}
+
+habitat_correlate_plots_b4_supp <- ggarrange(habitat_correlate_plots_b4[[1]], habitat_correlate_plots_b4[[2]], ncol = 1, nrow = 2, common.legend = TRUE, legend = "left")
+
+ggsave("habitat_correlate_plots_b4_supp.png", habitat_correlate_plots_b4_supp)
+
+habitat_correlate_plots_b4_supp
+
+```
+
+
+
+#### Data Processing: Beta regression of pairwise distances (unifrac and weighted unifrac) using unmerged, merged, and merged/subsetted datasets and AIC scores for a series of models 
+
+```{r}
+
+library(betareg)
+library(lmtest)
+
+# Function for applying a beta regression (betareg) to datasets in pairwise_tables list. 
+# The function removes high leverage (upper 5% quantile) and high Cook's distance (upper 5% quantile) data points
+
+beta_regression <- function(model_form, phy){
+  model <- betareg(model_form, phy, link = "logit")
+  leverage <- gleverage(model)
+  low_leverage_data <- names(leverage[leverage < quantile(gleverage(model), probs = seq(0,1,0.05))["95%"]])
+  phy <- phy[rownames(phy) %in% low_leverage_data, ]
+  cooksdistance <- cooks.distance(model)
+  low_cooks_data <- names(cooksdistance[cooksdistance < quantile(gleverage(model), probs = seq(0,1,0.05))["95%"]])
+  return(model)
+}
+
+
+# Creating two lists (beta_aic, and coef_test). The heirarchy in these lists mirror the heirarchy in pairwise_tables. 
+# beta_aic contains the AIC values for all models, including the original model formulation.
+# coef_test contains the coefficients and significance values for each covariate in specified in each model 
+
+beta_aic <- list()
+coef_test <- list()
+for(h in 1:2){
+  t1 <- c()
+  c1 <- list()
+  for(k in 1:2) {
+    t2 <- c()
+    c2 <- list()
+    for(j in 2:3){
+      
+      table <- pairwise_tables[[h]][[k]][[j]]
+      models <- list()
+      models[[1]] <- beta_regression("pdis ~ elev_diff", table)
+      models[[2]] <- beta_regression("pdis ~ elev_diff + copho", table)
+      models[[3]] <- beta_regression("pdis ~ elev_diff + habitat_diff", table)
+      models[[4]] <- beta_regression("pdis ~ elev_diff + copho + habitat_diff", table)
+      models[[5]] <- beta_regression("pdis ~ copho", table)
+      models[[6]] <- beta_regression("pdis ~ copho + habitat_diff", table)
+      models[[7]] <- beta_regression("pdis ~ habitat_diff", table)
+      beta_results <- data.frame(1:7, 4)
+      c3 <- list()
+        
+      for(i in 1:7){
+        temp <- as.character(models[[i]]$formula)[3]
+        temp <- sub(temp, pattern = "pdis", replacement = "Weighted UniFrac Distance")
+        temp <- sub(temp, pattern = "copho", replacement = "Cophenetic (Phylogenetic) Distance")
+        temp <- sub(temp, pattern = "elev_diff", replacement = "Difference in Elevation")
+        temp <- sub(temp, pattern = "habitat_diff", replacement = "Same/Different Habitat")
+        temp <- sub(temp, pattern = "[+]", replacement = "\n")
+        beta_results[i,1] <- paste("Model", i, sep = " ")
+        beta_results[i,2] <- temp
+        beta_results[i,3] <- AIC(models[[i]])
+        beta_results[i,4] <- i
+        c3[[i]] <- coeftest(models[[i]])
+      }
+      
+      colnames(beta_results) <- c("Model","Formula", "AIC", "order")
+      beta_results$dataset <- rep(paste("B", j, sep = ""), 7)
+      t2 <- rbind(t2, beta_results)
+      c2[[j]] <- c3
+      
+    }
+    
+    t2$subset <- rep(k, dim(t2)[1])
+    t1 <- rbind(t1, t2) 
+    c1[[k]] <- c2
+  }
+  
+  beta_aic[[h]] <- t1
+  coef_test[[h]] <- c1
+
+}
+
+```
+
+#### Fig3: AIC values across models  
+```{r}
+
+model_plots <- lapply(beta_aic, function(x){ 
+  
+    ggplot(x[x$subset == 1, ], aes(x = Model, y = AIC)) +
+      geom_point(size = 1) +
+      scale_x_discrete(limits = beta_results$Model[order(-beta_results$order)]) +
+      theme_bw() +
+      theme(axis.title.y = element_blank(), 
+            axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5), 
+            axis.text.y = element_text(angle = 0, vjust = 0.5, size = 7), 
+            panel.grid.minor=element_blank(), 
+            plot.title = element_text(size=8), 
+            axis.title.x = element_text(size = 8),
+            panel.spacing = unit(1, "mm")) +
+      coord_flip() +
+      facet_wrap(~dataset, scales = "free_x")
+  }
+  )
+
+ggarrange(model_plots[[1]], model_plots[[2]], nrow = 2, ncol = 1)
+
+```
+Beta glm models and AIC values for merged species comparisons on weighted UniFrac distances
+
+
+#### Differential abundance of high elevation and low elevation bacterial communities 
+```{r}
+
+library(DESeq2)
+
+merged_species_counts <- list()
+for(i in 1:3){
+  phy <- nzm_filtered2[[i]]
+  phy <- subset_samples(phy, type %in% "gut")
+  phy <- subset_samples(phy, !is.na(species.tree))
+  species_names <- unique(as.character(sample_data(phy)[,"species.tree"]$species.tree))
+  new_otu <- data.frame(row.names = taxa_names(phy))
+  new_sample_data <- data.frame(row.names = species_names)
+  for(j in 1:length(species_names)){
+    phy_individuals <- otu_table(phy)[, which(sample_data(phy)[, "species.tree"]$species.tree %in% species_names[j])]
+    new_otu <- cbind(new_otu, data.frame(x = apply(otu_table(phy_individuals), 1, mean)))
+    sample_data_individuals <- data.frame(sample_data(phy)[which(sample_data(phy)[, "species.tree"]$species.tree %in% species_names[j]),])
+    new_sample_data <- rbind(new_sample_data, data.frame(species.tree = species_names[j], elevation = mean(sample_data_individuals$elevation), genus = sample_data_individuals[1, "genus"], habitat = sample_data_individuals[1, "habitat"]))
+  }
+  colnames(new_otu) <- species_names
+  rownames(new_sample_data) <- new_sample_data$species.tree
+  merged_species_counts[[i]] <- phyloseq(otu_table(new_otu, taxa_are_rows = TRUE), sample_data(new_sample_data), phy_tree(phy), tax_table(phy))
+  
+}
+
+
+differential_abundance <- list()
+for(i in 2:3){
+  phy <- merged_species_counts[[i]]
+  phy <- subset_samples(phy, !is.na(elevation))
+  colnames(sample_data(phy))[1] <- "ID"
+
+  phy_kikihia <- subset_samples(phy, genus %in% "Kikihia")
+  phy_maoricicada <- subset_samples(phy, genus %in% "Maoricicada")
+  
+  elevation_table_kikihia <- sample_data(phy_kikihia)[, "elevation"]
+  elevation_table_maoricicada <- sample_data(phy_maoricicada)[, "elevation"]
+  
+  quantiles_kikihia <- quantile(elevation_table_kikihia$elevation)
+  quantiles_maoricicada <- quantile(elevation_table_maoricicada$elevation)
+  
+  low_elev_samples_kikihia <- rownames(elevation_table_kikihia[which(elevation_table_kikihia$elevation <= quantiles_kikihia[3]),])
+  high_elev_samples_kikihia <- rownames(elevation_table_kikihia[which(elevation_table_kikihia$elevation > quantiles_kikihia[3]), ])
+  
+  low_elev_samples_maoricicada <- rownames(elevation_table_maoricicada[which(elevation_table_maoricicada$elevation <= quantiles_maoricicada[3]),])
+  high_elev_samples_maoricicada <- rownames(elevation_table_maoricicada[which(elevation_table_maoricicada$elevation >= quantiles_maoricicada[3]), ])
+  
+  phy2 <- subset_samples(phy, ID %in% c(low_elev_samples_kikihia, high_elev_samples_kikihia))
+  sample_data(phy2)[sample_data(phy2)[, "ID"]$ID %in% low_elev_samples_kikihia, "elevation"] <- "low_elevation_kikihia"
+  sample_data(phy2)[sample_data(phy2)[, "ID"]$ID %in% high_elev_samples_kikihia, "elevation"] <- "high_elevation_kikihia"
+  sample_data(phy2)[, "elevation"] <- factor(sample_data(phy2)[, "elevation"]$elevation)
+  phy2 <- subset_taxa(phy2, taxa_sums(phy2) > 0)
+  phy_deseq <- phyloseq_to_deseq2(phy2, ~elevation)
+  
+  phy_deseq_means <- apply(counts(phy_deseq), 1, function(x){  exp(sum(log(x[x > 0]), na.rm = TRUE) / length(x)) })
+  
+  size_factors <- estimateSizeFactors(phy_deseq, geoMeans = phy_deseq_means)
+  deseq_results <- DESeq(size_factors, fitType="local")
+  results <- results(deseq_results)
+  results <- results[order(results$padj, na.last=NA), ]
+  significant_results <- results[results$padj < 0.01, ]
+  dat <- cbind(as(significant_results, "data.frame"), as(tax_table(phy2)[rownames(significant_results), ], "matrix"))
+  dat$genus <- rep("kikihia", dim(dat)[1])
+  dat$dataset <- rep(i, dim(dat)[1])
+  
+  phy2 <- subset_samples(phy, ID %in% c(low_elev_samples_maoricicada, high_elev_samples_maoricicada))
+  sample_data(phy2)[sample_data(phy2)[, "ID"]$ID %in% low_elev_samples_maoricicada, "elevation"] <- "low_elev_maoricicada"
+  sample_data(phy2)[sample_data(phy2)[, "ID"]$ID %in% high_elev_samples_maoricicada, "elevation"] <- "high_elev_maoricicada"
+  sample_data(phy2)[, "elevation"] <- factor(sample_data(phy2)[, "elevation"]$elevation)
+  phy2 <- subset_taxa(phy2, taxa_sums(phy2) > 0)
+  phy_deseq <- phyloseq_to_deseq2(phy2, ~elevation)
+  phy_deseq_means <- apply(counts(phy_deseq), 1, function(x){exp(sum(log(x[x > 0]), na.rm = TRUE) / length(x))})
+  size_factors <- estimateSizeFactors(phy_deseq, geoMeans = phy_deseq_means)
+  deseq_results <- DESeq(size_factors, fitType="local")
+  results <- results(deseq_results)
+  results <- results[order(results$padj, na.last=NA), ]
+  significant_results <- results[results$padj < 0.01, ]
+  dat2 <- cbind(as(significant_results, "data.frame"), as(tax_table(phy2)[rownames(significant_results), ], "matrix"))
+  dat2$genus <- rep("maoricicada", dim(dat2)[1])
+  dat2$dataset <- rep(i, dim(dat2)[1])
+
+  differential_abundance[[i]] <- rbind(dat, dat2)
+
+}
+
+
+```
+
+
+#### Fig3. Barplot of abundances of differentially abundant bacterial families 
+```{r}
+  
+bacteria <- as.character(rbind(differential_abundance[[2]], differential_abundance[[2]])$Family)
+bacteria <- bacteria[!is.na(bacteria)]
+
+b2_tab <- top_tax(merged_species_counts[[2]], length(taxa_names(merged_species_counts[[2]])))
+b3_tab <- top_tax(merged_species_counts[[3]], length(taxa_names(merged_species_counts[[3]])))
+
+b2_tab <- b2_tab[["top_absolute"]]
+b2_tab$dataset <- rep("B2", dim(b2_tab)[1])
+b2_tab$elevation <- sample_data(merged_species_counts[[2]])$elevation[match(b2_tab$sample, sample_data(merged_species_counts[[2]])$species.tree)]
+b2_tab$host_genus <- sample_data(merged_species_counts[[2]])$genus[match(b2_tab$sample, sample_data(merged_species_counts[[2]])$species.tree)]
+
+
+b3_tab <- b3_tab[["top_absolute"]]
+b3_tab$dataset <- rep("B3", dim(b3_tab)[1])
+b3_tab$elevation <- sample_data(merged_species_counts[[3]])$elevation[match(b3_tab$sample, sample_data(merged_species_counts[[3]])$species.tree)]
+b3_tab$host_genus <- sample_data(merged_species_counts[[3]])$genus[match(b3_tab$sample, sample_data(merged_species_counts[[3]])$species.tree)]
+
+tab <- rbind(b2_tab, b3_tab)
+
+tab <- tab[tab$Family %in% bacteria, ]
+tab <- tab[tab$host_genus %in% c("Kikihia", "Maoricicada"), ]
+
+tab$elevation_cut <- cut(tab$elevation, breaks = seq(0, 1600, 100), include.lowest = TRUE, ordered_result = TRUE)
+tab2 <- spread(tab, key = elevation_cut, value = abundance)
+tab2[, 13:dim(tab2)[2]] <- apply(tab2[, 13:dim(tab2)[2]], 2, function(x){ x/sum(x[!is.na(x)]) })
+tab <- gather(tab2, key = elevation_cut, value = abundance, 13:dim(tab2)[2])
+
+tab$bacteria <- paste(tab$Class, tab$Family, sep = "; ")
+
+sample_order <- unique(tab$elevation_cut)
+
+gg_differential_abundance <- ggplot(tab, aes(x = abundance , y = elevation_cut, fill = bacteria)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_brewer(palette = "Paired") +
+  scale_y_discrete(limits = sample_order, position = "right") +
+  labs(x = "", y = "Elevation (m)", fill = "") +
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+        legend.background = element_blank(),
+        legend.spacing.x = unit(0.8, 'mm'),
+        legend.spacing.y = unit(0, 'mm'), 
+        legend.key.height = unit(3, "mm"),
+        legend.key.size = unit(3, "mm"),
+        legend.text = element_text(size=4),
+        legend.margin = margin(2, 2, 2, 1),
+        legend.title = element_blank(),
+        plot.margin = margin(0, 0, 0, 0, "mm")) + 
+
+
+ggsave("gg_differential_abundance.png", gg_differential_abundance)
+
+gg_differential_abundance
+
+```
+
+
+
+#### Fig3. Final figure layout
+```{r}
+
+
+g1 <- ggarrange(gg1_distance + theme(axis.text.x = element_text(size = 5),
+                                     axis.title.x = element_text(size = 5),
+                                     axis.text.y = element_text(size = 5),
+                                     axis.title.y = element_text(size = 5), 
+                                     legend.position = c(1,1),
+                                     legend.justification = c("right", "top"), 
+                                     legend.background = element_blank(),
+                                     legend.spacing.x = unit(0.8, 'mm'),
+                                     legend.spacing.y = unit(0, 'mm'), 
+                                     legend.key.height = unit(3, "mm"),
+                                     legend.key.size = unit(3, "mm"),
+                                     legend.text = element_text(size=4), 
+                                     legend.margin = margin(2, 2, 2, 1),
+                                     legend.title = element_blank(),
+                                     plot.margin = margin(0, 0, 2, 0, "mm")
+                                     ), 
+                gg2_distance + theme(axis.text.x = element_text(size = 5),
+                                     axis.title.x = element_text(size = 5),
+                                     axis.text.y = element_text(size = 5, colour = "white"),
+                                     axis.title.y = element_text(size = 5, colour = "white"),
+                                     axis.ticks = element_blank(),
+                                     legend.position = c(1,1),
+                                     legend.justification = c("right", "top"), 
+                                     legend.background = element_blank(),
+                                     legend.spacing.x = unit(0.8, 'mm'),
+                                     legend.spacing.y = unit(0, 'mm'), 
+                                     legend.key.height = unit(3, "mm"),
+                                     legend.key.size = unit(3, "mm"),
+                                     legend.text = element_text(size=4), 
+                                     legend.margin = margin(2, 2, 2, 1),
+                                     legend.title = element_blank(),
+                                     plot.margin = margin(0, 0, 2, 0, "mm")
+                                     ), ncol = 2, nrow = 1, common.legend = TRUE, legend = "top", align = "hv") 
+
+g2 <- ggarrange( model_plots[[2]] + theme(axis.text.x = element_text(angle = 45, size = 4),
+                                                                           axis.text.y =  element_text(size = 4),
+                                                                           axis.title.x = element_blank(),
+                                                                           plot.title = element_text(size = 5),
+                                                                           strip.text.x = element_text(margin = margin(0.5,0,0.5,0, "mm"), size = 5)), 
+                model_plots[[1]] + theme(axis.text.x = element_text(angle = 45, size = 4),
+                                                                             axis.text.y =  element_text(size = 4),
+                                                                             axis.title.x = element_blank(),
+                                                                             plot.title = element_text(size = 5),
+                                                                             strip.text.x = element_text(margin = margin(0.5,0,0.5,0, "mm"), size = 5)), 
+                nrow = 2, ncol = 1, align = "hv") + theme(plot.margin = margin(0, 0, 0, 0, "mm"))
+
+g3 <- ggarrange(habitat_correlate_plots[[2]] + theme(axis.text.x = element_text(angle = 45, size = 4),
+                                                     axis.text.y =  element_text(size = 4),
+                                                     plot.title = element_blank(),
+                                                     legend.margin = margin(0, 0, 0, 0),
+                                                     legend.justification = c("right", "top"), 
+                                                     aspect.ratio = 1,
+                                                     plot.margin = margin(0, 0, 0, 0)
+                                     ),
+                habitat_correlate_plots[[1]] + theme(axis.text.x = element_text(angle = 45, size = 4),
+                                                     axis.text.y =  element_text(size = 5),
+                                                     plot.title = element_blank(),
+                                                     legend.margin = margin(0, 0, 0, 0),
+                                                     legend.justification = c("right", "top"),
+                                                     aspect.ratio = 1,
+                                                     plot.margin = margin(0, 0, 0, 0)
+                                                     ), 
+                nrow = 2, ncol = 1, align = "hv") + theme(plot.margin = margin(0, 0, 0, 0, "mm"))
+
+g4 <- gg_differential_abundance  + theme(legend.position = "none",
+                                        axis.text = element_text(size = 4),
+                                        axis.text.x = element_blank(),
+                                        axis.title = element_text(size = 4),
+                                        plot.margin = margin(0,0,0,5, "mm"))
+
+g5 <- as_ggplot(ggpubr::get_legend(gg_differential_abundance)) + theme(plot.margin = margin(2,2,2,20, "mm"))
+
+g6 <- ggarrange(g3, g2, ncol = 2, labels = c("C","D"), vjust = 1)
+
+g7 <- ggarrange(g1, g6, ncol = 1, nrow = 2, labels = c("B"))
+
+g8 <- ggarrange(map + theme(plot.margin = margin(0, 0.5, 0, 0, "cm")), g7, labels = c("A"), vjust = 3)
+
+g9 <- ggarrange(g8, ggarrange(g5, g4, nrow = 2, labels = c("E", "F"), hjust = c(-2, -2), vjust = c(2,-0.5)), ncol = 2, widths = c(1,0.25)) + theme(plot.margin = margin(1,2,1,1, "cm"))
+  
+ggsave("fig3.png", g9, width = 8, height = 5, units = "in")
+
+g9
+
+```
+
+
+
+
+#### Fig4: Pairwise distances in hybrid hosts 
+
+```{r}
+
+hybrid_ordination <- list()
+hybrid_permanova <- list()
+
+for(i in c("unifrac", "wunifrac")){
+  phy <- nzm_filtered2[[1]]
+  phy <- subset_samples(phy, !type %in% c("control", "bacteriome") & !ID %in% c("Jasons") & !genus %in% c("Unknown9"))
+  ord <- ordinate(phy, method = "PCoA", distance = i)
+  ordDF <- data.frame(PC1 = ord$vectors[,1], PC2 = ord$vectors[,2])
+  ordDF$genus <- sample_data(phy)$genus
+  ordDF$species <-  sample_data(phy)$species
+  ordDF$depth <- sample_sums(phy)
+  ordDF$island <- sample_data(phy)$island
+  ordDF$elevation <- sample_data(phy)$elevation
+  ordDF$type <- sample_data(phy)$type
+  ordDF$hybrid <- ifelse(grepl(ordDF$species, pattern = "hybrid"), yes = "hybrid", no = "parent")
+  ordDF$process_date <- sample_data(phy)$process_date
+
+  dis <- phyloseq::distance(phy, method = i)
+  hybrid_permanova[[i]] <- adonis2(dis ~ hybrid + process_date + depth, data = ordDF, permutations = 9999, method="bray")
+  
+  hybrid_ordination[[i]] <- ggplot(ordDF, aes(x = PC1, y = PC2, col = hybrid, shape = process_date, size = depth)) + 
+    geom_point(alpha = 0.8) +
+    xlab(paste("PC1", paste(round(100 * ord$values$Eigenvalues[1]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) +   	
+    ylab(paste("PC2", paste(round(100 * ord$values$Eigenvalues[2]/sum(ord$values$Eigenvalues), 1), "%", sep = " "), sep = ": ")) + 
+    labs(title = i) +
+    scale_color_manual(values = c("black", "grey")) +
+    scale_size_continuous(range = c(1,4)) +
+    theme_bw() +
+    theme(
+      panel.grid.major = element_blank(), 
+      panel.grid.minor = element_blank())
+}
+
+hybrid_permanova
+
+hybrid_ordination[[1]] <- hybrid_ordination[[1]] +
+  annotate("text", x = -0.15, y = -0.2, size = 2, label = "Hybrid Status (R2 = 0.07)* \n Processing Date (0.09)* \n Sample Depth (NS)")
+
+hybrid_ordination[[2]] <- hybrid_ordination[[2]] +
+  annotate("text", x = -0.04, y = 0.15, size = 2, label = "Hybrid Status (NS) \n Processing Date (0.11)* \n Sample Depth (0.06)*") +
+  theme(legend.position = c(1,1),
+        legend.justification = c("right", "top"))
+
+ggarrange(hybrid_ordination[[1]] , hybrid_ordination[[2]])
+
+```
+
+```{r}
+
+phy <- nzm_filtered2[[1]]
+phy <- tax_glom(phy, taxrank = "Genus")
+
+phy_table <- data.frame(t(otu_table(phy)), check.names = FALSE)
+phy_metadata <- data.frame(sample_data(phy), check.names = FALSE)
+phy_metadata$hybrid_status <- ifelse(grepl(x = phy_metadata$species, pattern = "hybrid"), yes = "hybrids", no = "parent")
+
+phy_table$hybrid_status <- phy_metadata$hybrid_status
+
+ftest <- lapply(phy_table, FUN = fisher.test, y = phy_table$hybrid_status)
+
+ftest_pvals <- unlist(lapply(ftest, function(x) x$p.value))
+ftest_pvals <- ftest_pvals[-length(ftest_pvals)]
+
+table(ftest_pvals < 0.05)
+table(ftest_pvals < 0.05/length(ftest_pvals)) #Binferroni-corrected significance value 
+
+```
+Fisher's Exact test across all ASVs. After correction for multiple testing, there 0 ASVs are significantly associated with hybrid/parent sample groupings. 
+
+```{r}
+
+tab <- top_tax(phy, 1)
+tab <- tab[["top_relative"]]
+tab$hybrid_status <- phy_metadata$hybrid_status[match(tab$sample, phy_metadata$ID)]
+tab$sample <- paste(tab$sample, tab$hybrid_status)
+order <- unique(tab[order(tab$hybrid_status), "sample"])
+
+hybrids_bar <- ggplot(tab, aes(x = abundance, y = sample, fill = Genus)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_brewer(palette = "Set3") +
+  scale_y_discrete(limits = order) +
+  labs(x = "", y = "", fill = "") +
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+        legend.background = element_blank(),
+        legend.spacing.x = unit(0.8, 'mm'),
+        legend.spacing.y = unit(0, 'mm'), 
+        legend.key.height = unit(3, "mm"),
+        legend.key.size = unit(3, "mm"),
+        legend.text = element_text(size=4),
+        legend.margin = margin(2, 2, 2, 1),
+        legend.title = element_blank(),
+        plot.margin = margin(0, 0, 0, 0, "mm"))
+
+hybrids_bar
+
+```
+
+
+```{r}
+
+library(moments)
+
+table_unifrac <- pairwise_tables[[1]][[3]][[1]]
+table_unifrac$distance <- rep("unifrac", dim(table_unifrac)[1])
+table_wunifrac <- pairwise_tables[[2]][[3]][[1]]
+table_wunifrac$distance <- rep("wunifrac", dim(table_wunifrac)[1])
+
+table <- rbind(table_unifrac, table_wunifrac)
+
+hybrid_correlate <- ggplot(table, aes(x = hybrid_comparison, y = pdis, col = processing_date)) +
+  geom_jitter(width = 0.15, alpha = 0.1, size = 0.5) +
+  stat_summary(fun.y=mean, geom="line", aes(group=processing_date)) +
+  stat_summary(fun.y=mean, geom="point", aes(group=processing_date)) +
+  labs(x = "", y = "Weighted UniFrac Distance", title = "B1 Dataset") +
+  scale_color_brewer(palette = "Set1") +
+	theme_bw() +
+  theme(axis.text.x = element_text(size = 7, angle = 15, vjust = 0.5, hjust = 0.5), axis.title.y = element_text(size = 7), plot.title = element_text(size=8), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + facet_wrap(~distance, scales = "free_y")
+
+hybrid_correlate
+
+```
+Testing hybrids differences
+
+
+
+```{r}
+
+bonett.test(x = table[table$hybrid_comparison == "parent/parent" & !is.na(table$pdis), "pdis"])
+
+var.test(table[table$hybrid_comparison == "hybrid/hybrid" & !is.na(table$pdis), "pdis"], table[table$hybrid_comparison == "parent/parent" & !is.na(table$pdis), "pdis"])
+
+ks.test(table[table$hybrid_comparison == "hybrid/hybrid", "pdis"], table[table$hybrid_comparison == "parent/parent", "pdis"])
+
+ks.test(table[table$hybrid_comparison == "parent/hybrid", "pdis"], table[table$hybrid_comparison == "parent/parent", "pdis"])
+
+ks.test(table[table$hybrid_comparison == "parent/hybrid", "pdis"], table[table$hybrid_comparison == "hybrid/hybrid", "pdis"])
+
+kruskal.test(x = table$pdis, g = table$hybrid_comparison)
+```
+Testing the effect of being a hybrid on pairwise bacterial communty distances 
+
+```{r}
+
+fig4 <- ggarrange(
+  ggarrange(
+    ggarrange(hybrid_ordination[[1]] + theme(legend.position = "none", 
+                                             axis.text.x = element_text(size = 5),
+                                             axis.text.y = element_text(size = 5),
+                                             axis.title.x = element_text(size = 5),
+                                             axis.title.y = element_text(size = 5),
+                                             plot.title = element_text(size = 5),
+                                             plot.margin = margin(2, 2, 2, 2, "mm")),
+              hybrid_ordination[[2]] + guides(size = FALSE) + theme(axis.text.x = element_text(size = 5),
+                                                                    axis.text.y = element_text(size = 5),
+                                                                    axis.title.x = element_text(size = 5),
+                                                                    axis.title.y = element_text(size = 5),
+                                                                    plot.title = element_text(size = 5),
+                                                                    legend.position = c(1,1),
+                                                                    legend.justification = c("right", "top"), 
+                                                                    legend.background = element_blank(),
+                                                                    legend.spacing.x = unit(0.8, 'mm'),
+                                                                    legend.spacing.y = unit(0, 'mm'),
+                                                                    legend.key.height = unit(3, "mm"),
+                                                                    legend.key.size = unit(3, "mm"),
+                                                                    legend.text = element_text(size=4),
+                                                                    legend.margin = margin(2, 2, 2, 1),
+                                                                    legend.title = element_blank(),
+                                                                    plot.margin = margin(2, 2, 2, 2, "mm"))),
+    hybrid_correlate + theme(axis.text.x = element_text(size = 5, angle = 45, hjust = 1, vjust = 1),
+                             axis.text.y = element_text(size = 5),
+                             axis.title.x = element_blank(),
+                             axis.title.y = element_blank(),
+                             plot.title = element_blank(),
+                             legend.position = "left",
+                             legend.justification = c("left", "top"),
+                             legend.background = element_blank(),
+                             legend.spacing.x = unit(0.8, 'mm'),
+                             legend.spacing.y = unit(0, 'mm'),
+                             legend.key.height = unit(3, "mm"),
+                             legend.key.size = unit(5, "mm"),
+                             legend.text = element_text(size=5),
+                             legend.margin = margin(2, 2, 2, 1),
+                             legend.title = element_blank(),
+                             plot.margin = margin(2, 2, 2, 2, "mm"),
+                             strip.text.x = element_text(margin = margin(0.5,0,0.5,0, "mm"), size = 5),
+                             strip.background = element_rect(colour = "white", fill = "white")), 
+    ncol = 1, nrow = 2),
+  hybrids_bar + theme(axis.text.x = element_blank(),
+                      axis.text.y = element_text(size = 5),
+                      legend.position = "right",
+                      legend.spacing.x = unit(0.8, 'mm'),
+                      legend.spacing.y = unit(0, 'mm'),
+                      legend.key.height = unit(3, "mm"),
+                      legend.key.size = unit(5, "mm"),
+                      legend.text = element_text(size=5),
+                      legend.margin = margin(0, 0, 0, 0),
+                      plot.margin = margin(2, 2, 2, 2, "mm")), 
+  ncol = 2, nrow = 1) + theme(plot.margin = margin(2,2,2,2, "mm"))
+
+ggsave("fig4.png", fig4, width = 8, height = 4, units = "in")
+
+fig4
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
